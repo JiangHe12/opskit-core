@@ -33,9 +33,7 @@ func Configure(next Options) {
 	if next.KeychainService != "" {
 		options.KeychainService = next.KeychainService
 	}
-	if next.KeychainAccountPrefix != "" {
-		options.KeychainAccountPrefix = next.KeychainAccountPrefix
-	}
+	options.KeychainAccountPrefix = next.KeychainAccountPrefix
 	if len(next.EncryptedFileMagic) > 0 {
 		options.EncryptedFileMagic = append([]byte(nil), next.EncryptedFileMagic...)
 	}
