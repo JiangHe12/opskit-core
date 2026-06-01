@@ -45,6 +45,76 @@ func TestJSONDataNakedObject(t *testing.T) {
 	}
 }
 
+func TestJSONDataEnvelopeUsesConfiguredAPIVersion(t *testing.T) {
+	Configure(Options{APIVersion: "example.io/v1"})
+	t.Cleanup(func() { Configure(Options{APIVersion: "opskit-core.io/v1"}) })
+
+	var out bytes.Buffer
+	p := NewWithWriters(FormatJSON, &out, &bytes.Buffer{})
+	if err := p.JSONDataEnvelope(JSONDataEnvelope{
+		Kind: "Object",
+		Data: map[string]string{"name": "demo"},
+	}); err != nil {
+		t.Fatalf("JSONDataEnvelope() error = %v", err)
+	}
+
+	var decoded struct {
+		APIVersion string            `json:"apiVersion"`
+		Kind       string            `json:"kind"`
+		Success    bool              `json:"success"`
+		Data       map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v; output = %s", err, out.String())
+	}
+	if decoded.APIVersion != "example.io/v1" || decoded.Kind != "Object" || !decoded.Success || decoded.Data["name"] != "demo" {
+		t.Fatalf("decoded = %+v", decoded)
+	}
+}
+
+func TestJSONListEnvelopeWrapsPagination(t *testing.T) {
+	Configure(Options{APIVersion: "example.io/v1"})
+	t.Cleanup(func() { Configure(Options{APIVersion: "opskit-core.io/v1"}) })
+
+	var out bytes.Buffer
+	p := NewWithWriters(FormatJSON, &out, &bytes.Buffer{})
+	if err := p.JSONListEnvelope(JSONListEnvelope{
+		Kind:      "Table",
+		Items:     []map[string]string{{"name": "demo"}},
+		Total:     3,
+		Page:      2,
+		PageSize:  1,
+		Truncated: true,
+	}); err != nil {
+		t.Fatalf("JSONListEnvelope() error = %v", err)
+	}
+
+	var decoded struct {
+		APIVersion string `json:"apiVersion"`
+		Kind       string `json:"kind"`
+		Success    bool   `json:"success"`
+		Data       struct {
+			Items     []map[string]string `json:"items"`
+			Total     int                 `json:"total"`
+			Page      int                 `json:"page"`
+			PageSize  int                 `json:"pageSize"`
+			Truncated bool                `json:"truncated"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v; output = %s", err, out.String())
+	}
+	if decoded.APIVersion != "example.io/v1" || decoded.Kind != "Table" || !decoded.Success {
+		t.Fatalf("decoded envelope = %+v", decoded)
+	}
+	if decoded.Data.Total != 3 || decoded.Data.Page != 2 || decoded.Data.PageSize != 1 || !decoded.Data.Truncated {
+		t.Fatalf("decoded pagination = %+v", decoded.Data)
+	}
+	if len(decoded.Data.Items) != 1 || decoded.Data.Items[0]["name"] != "demo" {
+		t.Fatalf("decoded items = %+v", decoded.Data.Items)
+	}
+}
+
 func TestJSONListNakedArray(t *testing.T) {
 	var out bytes.Buffer
 	p := NewWithWriters(FormatJSON, &out, &bytes.Buffer{})

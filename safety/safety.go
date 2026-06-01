@@ -200,6 +200,17 @@ func authorizationError(message string) *apperrors.AppError {
 	return apperrors.New(apperrors.CodeAuthorizationRequired, message, nil)
 }
 
+// ValidateBackupPolicy enforces explicit backup choices for write operations.
+func ValidateBackupPolicy(nonInteractive, backup, noBackup, protected bool) error {
+	if protected && noBackup {
+		return apperrors.New(apperrors.CodeUsageError, "--no-backup is not allowed in protected production contexts", nil)
+	}
+	if nonInteractive && !backup && !noBackup {
+		return apperrors.New(apperrors.CodeUsageError, "non-interactive mode requires explicit --backup or --no-backup for write operations", nil)
+	}
+	return nil
+}
+
 // checkRole enforces RBAC when Roles are configured on the context.
 // Operators absent from the map are denied. Operators whose role does not
 // permit the requested risk level are denied.

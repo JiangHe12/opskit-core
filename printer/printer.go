@@ -36,6 +36,36 @@ type Printer struct {
 	PlainHead bool
 }
 
+// Options controls optional printer response metadata.
+type Options struct {
+	APIVersion string
+}
+
+var options = Options{APIVersion: "opskit-core.io/v1"}
+
+// Configure sets package-level printer defaults for optional helpers.
+func Configure(next Options) {
+	if next.APIVersion != "" {
+		options.APIVersion = next.APIVersion
+	}
+}
+
+// JSONDataEnvelope is an opt-in enveloped single-object JSON response.
+type JSONDataEnvelope struct {
+	Kind string
+	Data any
+}
+
+// JSONListEnvelope is an opt-in enveloped list JSON response.
+type JSONListEnvelope struct {
+	Kind      string
+	Items     any
+	Total     int
+	Page      int
+	PageSize  int
+	Truncated bool
+}
+
 // New creates a Printer using stdout/stderr.
 func New(format Format) *Printer {
 	disableColorIfNeeded(os.Stdout)
@@ -114,10 +144,52 @@ func (p *Printer) JSONData(kind string, data any) error {
 	return p.printJSON(data)
 }
 
+// JSONDataEnvelope prints an opt-in enveloped single-object JSON response.
+func (p *Printer) JSONDataEnvelope(payload JSONDataEnvelope) error {
+	return p.printJSON(struct {
+		APIVersion string `json:"apiVersion"`
+		Kind       string `json:"kind"`
+		Success    bool   `json:"success"`
+		Data       any    `json:"data"`
+	}{
+		APIVersion: options.APIVersion,
+		Kind:       payload.Kind,
+		Success:    true,
+		Data:       payload.Data,
+	})
+}
+
 // JSONList prints items as a naked JSON array. Pagination parameters are kept for API compatibility.
 func (p *Printer) JSONList(kind string, items any, total, page, pageSize int, truncated bool) error {
 	_, _, _, _, _ = kind, total, page, pageSize, truncated
 	return p.printJSON(items)
+}
+
+// JSONListEnvelope prints an opt-in enveloped list JSON response.
+func (p *Printer) JSONListEnvelope(payload JSONListEnvelope) error {
+	return p.printJSON(struct {
+		APIVersion string `json:"apiVersion"`
+		Kind       string `json:"kind"`
+		Success    bool   `json:"success"`
+		Data       any    `json:"data"`
+	}{
+		APIVersion: options.APIVersion,
+		Kind:       payload.Kind,
+		Success:    true,
+		Data: struct {
+			Items     any  `json:"items"`
+			Total     int  `json:"total"`
+			Page      int  `json:"page"`
+			PageSize  int  `json:"pageSize"`
+			Truncated bool `json:"truncated"`
+		}{
+			Items:     payload.Items,
+			Total:     payload.Total,
+			Page:      payload.Page,
+			PageSize:  payload.PageSize,
+			Truncated: payload.Truncated,
+		},
+	})
 }
 
 func (p *Printer) tablePlain(headers []string, rows [][]string) {

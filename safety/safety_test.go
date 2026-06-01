@@ -176,3 +176,32 @@ func TestRBACReaderRejectionMessageNamesWriter(t *testing.T) {
 		t.Fatalf("error = %q, want it to contain 'requires role: writer'", err.Error())
 	}
 }
+
+func TestValidateBackupPolicyRejectsNoBackupInProtectedContext(t *testing.T) {
+	err := ValidateBackupPolicy(false, false, true, true)
+	if err == nil {
+		t.Fatal("ValidateBackupPolicy() error = nil, want protected no-backup rejection")
+	}
+	if !strings.Contains(err.Error(), "--no-backup is not allowed") {
+		t.Fatalf("ValidateBackupPolicy() error = %v", err)
+	}
+}
+
+func TestValidateBackupPolicyRequiresExplicitBackupChoiceInNonInteractive(t *testing.T) {
+	err := ValidateBackupPolicy(true, false, false, false)
+	if err == nil {
+		t.Fatal("ValidateBackupPolicy() error = nil, want explicit backup choice rejection")
+	}
+	if !strings.Contains(err.Error(), "non-interactive mode requires explicit --backup or --no-backup") {
+		t.Fatalf("ValidateBackupPolicy() error = %v", err)
+	}
+}
+
+func TestValidateBackupPolicyAllowsExplicitChoices(t *testing.T) {
+	if err := ValidateBackupPolicy(true, true, false, true); err != nil {
+		t.Fatalf("ValidateBackupPolicy(nonInteractive backup protected) error = %v", err)
+	}
+	if err := ValidateBackupPolicy(true, false, true, false); err != nil {
+		t.Fatalf("ValidateBackupPolicy(nonInteractive noBackup unprotected) error = %v", err)
+	}
+}
