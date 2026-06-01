@@ -52,6 +52,9 @@ type Config struct {
 	ConfigDirName      string
 	PrivateKeyEnvVar   string
 	TargetTypeJSONName string
+	TimestampJSONName  string
+	EventTypeJSONName  string
+	OperatorJSONName   string
 }
 
 var config = Config{
@@ -59,6 +62,9 @@ var config = Config{
 	ConfigDirName:      ".opskit",
 	PrivateKeyEnvVar:   "OPSKIT_AUDIT_PRIVATE_KEY",
 	TargetTypeJSONName: "resourceType",
+	TimestampJSONName:  "timestamp",
+	EventTypeJSONName:  "eventType",
+	OperatorJSONName:   "operator",
 }
 
 // Configure sets package-level audit defaults for a consumer CLI.
@@ -74,6 +80,15 @@ func Configure(next Config) {
 	}
 	if next.TargetTypeJSONName != "" {
 		config.TargetTypeJSONName = next.TargetTypeJSONName
+	}
+	if next.TimestampJSONName != "" {
+		config.TimestampJSONName = next.TimestampJSONName
+	}
+	if next.EventTypeJSONName != "" {
+		config.EventTypeJSONName = next.EventTypeJSONName
+	}
+	if next.OperatorJSONName != "" {
+		config.OperatorJSONName = next.OperatorJSONName
 	}
 }
 
@@ -195,6 +210,11 @@ func AppendWithOptions(path string, event Event, opts Options) error {
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
 	}
+	return AppendRecord(path, event, opts)
+}
+
+// AppendRecord appends one JSONL record using the record's own JSON shape.
+func AppendRecord(path string, record any, opts Options) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return apperrors.New(apperrors.CodeLocalIOError, "failed to create audit directory", err)
 	}
@@ -214,7 +234,7 @@ func AppendWithOptions(path string, event Event, opts Options) error {
 	if err := os.Chmod(path, 0o600); err != nil {
 		return apperrors.New(apperrors.CodeLocalIOError, "failed to set audit log permissions", err)
 	}
-	line, err := encodeEventLine(event, opts.EncryptPublicKeyPath)
+	line, err := encodeRecordLine(record, opts.EncryptPublicKeyPath)
 	if err != nil {
 		return err
 	}
@@ -225,7 +245,11 @@ func AppendWithOptions(path string, event Event, opts Options) error {
 }
 
 func encodeEventLine(event Event, publicKeyPath string) ([]byte, error) {
-	plain, err := json.Marshal(event)
+	return encodeRecordLine(event, publicKeyPath)
+}
+
+func encodeRecordLine(record any, publicKeyPath string) ([]byte, error) {
+	plain, err := json.Marshal(record)
 	if err != nil {
 		return nil, apperrors.New(apperrors.CodeLocalIOError, "failed to marshal audit event", err)
 	}

@@ -3,7 +3,6 @@ package audit
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -102,7 +101,7 @@ func verifyOneFile(path string, opts VerifyOptions, previous time.Time) (VerifyF
 			continue
 		}
 		fileResult.Total++
-		event, malformed, err := verifyLine(line, opts)
+		fields, malformed, err := verifyLine(line, opts)
 		if err != nil {
 			return fileResult, nil, violations, err
 		}
@@ -113,14 +112,14 @@ func verifyOneFile(path string, opts VerifyOptions, previous time.Time) (VerifyF
 			continue
 		}
 		fileResult.Valid++
-		if event.Timestamp.IsZero() || event.EventType == "" || event.Operator == "" {
+		if fields.Timestamp.IsZero() || fields.EventType == "" || fields.Operator == "" {
 			fileResult.SchemaError++
 		}
-		if !last.IsZero() && !event.Timestamp.IsZero() && event.Timestamp.Before(last) {
+		if !last.IsZero() && !fields.Timestamp.IsZero() && fields.Timestamp.Before(last) {
 			violations++
 		}
-		if !event.Timestamp.IsZero() {
-			last = event.Timestamp
+		if !fields.Timestamp.IsZero() {
+			last = fields.Timestamp
 		}
 		kept.WriteString(raw)
 		kept.WriteByte('\n')
@@ -145,23 +144,20 @@ func verifyOneFile(path string, opts VerifyOptions, previous time.Time) (VerifyF
 	return fileResult, &last, violations, nil
 }
 
-func verifyLine(line string, opts VerifyOptions) (Event, bool, error) {
+func verifyLine(line string, opts VerifyOptions) (rawRecordFields, bool, error) {
 	plain := []byte(line)
 	if opts.Decrypt {
 		var err error
 		plain, err = decryptAuditLine(line, opts.PrivateKey)
 		if err != nil {
-			return Event{}, false, err
+			return rawRecordFields{}, false, err
 		}
 	}
-	var event Event
-	if !json.Valid(plain) {
-		return Event{}, true, nil
+	fields, ok := parseRawRecordFields(plain)
+	if !ok {
+		return rawRecordFields{}, true, nil
 	}
-	if err := json.Unmarshal(plain, &event); err != nil {
-		return Event{}, true, nil //nolint:nilerr // Schema mismatches are malformed audit rows, not fatal verifier errors.
-	}
-	return event, false, nil
+	return fields, false, nil
 }
 
 func readLockStatus(path string) VerifyLockStatus {

@@ -41,6 +41,20 @@ type Result struct {
 	MalformedEntries int
 }
 
+// RawRecord is one matched audit row plus the fields parsed for filtering.
+type RawRecord struct {
+	Line      string
+	Timestamp time.Time
+	EventType string
+	Operator  string
+}
+
+// RawResult aggregates matched raw rows and a count of unparseable lines skipped.
+type RawResult struct {
+	Records          []RawRecord
+	MalformedEntries int
+}
+
 var relativeTimeRE = regexp.MustCompile(`^(\d+)(s|m|h|d|w)$`)
 
 // ParseTime parses a --since/--until value. Accepts either a relative offset
@@ -106,6 +120,32 @@ func Query(path string, filter Filter) (Result, error) {
 	return result, nil
 }
 
+// QueryRaw streams audit logs and returns matching raw JSONL rows.
+func QueryRaw(path string, filter Filter) (RawResult, error) {
+	result := RawResult{Records: []RawRecord{}}
+	files, err := queryFiles(path)
+	if err != nil {
+		return result, err
+	}
+	for _, filePath := range files {
+		if err := queryOneFileRaw(filePath, filter, &result); err != nil {
+			return result, err
+		}
+		if !filter.Reverse && filter.Limit > 0 && len(result.Records) >= filter.Limit {
+			break
+		}
+	}
+	if filter.Reverse {
+		sort.SliceStable(result.Records, func(i, j int) bool {
+			return result.Records[i].Timestamp.After(result.Records[j].Timestamp)
+		})
+		if filter.Limit > 0 && len(result.Records) > filter.Limit {
+			result.Records = result.Records[:filter.Limit]
+		}
+	}
+	return result, nil
+}
+
 func queryFiles(path string) ([]string, error) {
 	rotated, err := RotatedFiles(path)
 	if err != nil {
@@ -138,6 +178,14 @@ func queryOneFile(path string, filter Filter, result *Result) error {
 		if err != nil {
 			return err
 		}
+		fields, ok := parseRawRecordFields(plain)
+		if !ok {
+			result.MalformedEntries++
+			continue
+		}
+		if !matchesRawFilter(fields, filter) {
+			continue
+		}
 		var event Event
 		if err := json.Unmarshal(plain, &event); err != nil {
 			result.MalformedEntries++
@@ -148,6 +196,52 @@ func queryOneFile(path string, filter Filter, result *Result) error {
 		}
 		result.Events = append(result.Events, event)
 		if !filter.Reverse && filter.Limit > 0 && len(result.Events) >= filter.Limit {
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return apperrors.New(apperrors.CodeLocalIOError, "failed to read audit log", err)
+	}
+	return nil
+}
+
+func queryOneFileRaw(path string, filter Filter, result *RawResult) error {
+	file, err := os.Open(path) //nolint:gosec // path is user-supplied audit log location.
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return apperrors.New(apperrors.CodeLocalIOError, "failed to open audit log", err)
+	}
+	defer func() { _ = file.Close() }()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 1024*1024), 4*1024*1024)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		plain, err := decryptAuditLine(line, filter.PrivateKey)
+		if err != nil {
+			return err
+		}
+		fields, ok := parseRawRecordFields(plain)
+		if !ok {
+			result.MalformedEntries++
+			continue
+		}
+		if !matchesRawFilter(fields, filter) {
+			continue
+		}
+		result.Records = append(result.Records, RawRecord{
+			Line:      string(plain),
+			Timestamp: fields.Timestamp,
+			EventType: fields.EventType,
+			Operator:  fields.Operator,
+		})
+		if !filter.Reverse && filter.Limit > 0 && len(result.Records) >= filter.Limit {
 			break
 		}
 	}
