@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -20,7 +21,10 @@ const (
 
 // Options configures lock acquisition behavior.
 type Options struct {
-	TimeoutEnvVar string
+	TimeoutEnvVar        string
+	DetailedTimeoutError bool
+	WarnBelowMinTimeout  bool
+	Stderr               io.Writer
 }
 
 var options = Options{TimeoutEnvVar: "OPSKIT_LOCK_TIMEOUT"}
@@ -30,6 +34,9 @@ func Configure(next Options) {
 	if next.TimeoutEnvVar != "" {
 		options.TimeoutEnvVar = next.TimeoutEnvVar
 	}
+	options.DetailedTimeoutError = next.DetailedTimeoutError
+	options.WarnBelowMinTimeout = next.WarnBelowMinTimeout
+	options.Stderr = next.Stderr
 }
 
 // Lock provides owner-token based file locking.
@@ -50,6 +57,7 @@ func New(path string) *Lock {
 func (l *Lock) Acquire() error {
 	lockPath := l.path + ".lock"
 	retries := effectiveMaxRetries()
+	timeout := time.Duration(retries) * retryInterval
 	for i := 0; i < retries; i++ {
 		if err := l.tryAcquire(lockPath); err == nil {
 			return nil
@@ -60,6 +68,9 @@ func (l *Lock) Acquire() error {
 			continue
 		}
 		time.Sleep(retryInterval)
+	}
+	if options.DetailedTimeoutError {
+		return apperrors.New(apperrors.CodeLocalIOError, fmt.Sprintf("lock acquire: timed out after %s waiting for %s", timeout, lockPath), nil)
 	}
 	return apperrors.New(apperrors.CodeLocalIOError, fmt.Sprintf("lock acquire timed out for %s", lockPath), nil)
 }
@@ -138,6 +149,9 @@ func effectiveMaxRetries() int {
 		if value := os.Getenv(options.TimeoutEnvVar); value != "" {
 			duration, err := time.ParseDuration(value)
 			if err == nil && duration > 0 {
+				if duration < retryInterval && options.WarnBelowMinTimeout {
+					_, _ = fmt.Fprintf(stderr(), "warning: %s below minimum %s; using %s\n", options.TimeoutEnvVar, retryInterval, retryInterval)
+				}
 				retries := int(duration / retryInterval)
 				if retries < 1 {
 					return 1
@@ -147,4 +161,11 @@ func effectiveMaxRetries() int {
 		}
 	}
 	return maxRetries
+}
+
+func stderr() io.Writer {
+	if options.Stderr != nil {
+		return options.Stderr
+	}
+	return os.Stderr
 }

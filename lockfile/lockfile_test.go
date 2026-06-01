@@ -1,9 +1,11 @@
 package lockfile
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -141,4 +143,44 @@ func TestAcquireTimeoutWhenLockHeld(t *testing.T) {
 	if err == nil {
 		t.Fatal("Acquire() error = nil, want timeout error")
 	}
+}
+
+func TestAcquireTimeoutCanUseDetailedMessage(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "config")
+	holder := New(base)
+	if err := holder.Acquire(); err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+	defer func() { _ = holder.Release() }()
+
+	Configure(Options{TimeoutEnvVar: "OPSKIT_LOCK_TIMEOUT", DetailedTimeoutError: true})
+	t.Setenv("OPSKIT_LOCK_TIMEOUT", "1ms")
+	waiter := New(base)
+	err := waiter.Acquire()
+	if err == nil {
+		t.Fatal("Acquire() error = nil, want timeout")
+	}
+	want := "lock acquire: timed out after 100ms waiting for " + base + ".lock"
+	if got := err.Error(); got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+	Configure(Options{TimeoutEnvVar: "OPSKIT_LOCK_TIMEOUT", DetailedTimeoutError: false})
+}
+
+func TestEffectiveMaxRetriesWarnsBelowMinimumWhenConfigured(t *testing.T) {
+	var stderr bytes.Buffer
+	Configure(Options{
+		TimeoutEnvVar:       "TEST_LOCK_TIMEOUT",
+		WarnBelowMinTimeout: true,
+		Stderr:              &stderr,
+	})
+	t.Setenv("TEST_LOCK_TIMEOUT", "1ms")
+
+	if got := effectiveMaxRetries(); got != 1 {
+		t.Fatalf("effectiveMaxRetries() = %d, want 1", got)
+	}
+	if !strings.Contains(stderr.String(), "warning: TEST_LOCK_TIMEOUT below minimum 100ms; using 100ms") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	Configure(Options{TimeoutEnvVar: "OPSKIT_LOCK_TIMEOUT"})
 }
