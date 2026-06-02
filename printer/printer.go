@@ -313,7 +313,7 @@ func (d listEnvelopeData) MarshalJSON() ([]byte, error) {
 	if err := writeJSONField(&out, "page", d.Page); err != nil {
 		return nil, err
 	}
-	if err := writeJSONField(&out, "page"+"Size", d.PageSize); err != nil {
+	if err := writeJSONField(&out, "pageSize", d.PageSize); err != nil {
 		return nil, err
 	}
 	if err := writeJSONField(&out, "truncated", d.Truncated); err != nil {
