@@ -122,6 +122,9 @@ type Store[T any] struct{ base BaseAccessor[T] }
 // NewStore creates a typed context store.
 func NewStore[T any](base BaseAccessor[T]) Store[T] { return Store[T]{base: base} }
 
+// NewStoreWithoutBase creates a typed context store for schemas that do not embed Base.
+func NewStoreWithoutBase[T any]() Store[T] { return Store[T]{} }
+
 // Load reads the context config file. Missing file returns an empty config.
 func (s Store[T]) Load() (*Config[T], error) {
 	path, err := configPath()
@@ -279,6 +282,9 @@ func (s Store[T]) decode(data []byte, allowEmptyVersion bool) (*Config[T], error
 	}
 	s.applyLoadedContextDefaults(data, &cfg)
 	for name, item := range cfg.Contexts {
+		if s.base == nil {
+			continue
+		}
 		base := s.base(&item)
 		if base == nil {
 			continue
@@ -292,7 +298,7 @@ func (s Store[T]) decode(data []byte, allowEmptyVersion bool) (*Config[T], error
 }
 
 func (s Store[T]) applyLoadedContextDefaults(data []byte, cfg *Config[T]) {
-	if cfg == nil || len(cfg.Contexts) == 0 {
+	if s.base == nil || cfg == nil || len(cfg.Contexts) == 0 {
 		return
 	}
 	var doc yaml.Node

@@ -19,6 +19,14 @@ type testContext struct {
 
 var testStore = NewStore(func(item *testContext) *Base { return &item.Base })
 
+type noBaseContext struct {
+	Server              string `yaml:"server"`
+	Username            string `yaml:"username"`
+	Namespace           string `yaml:"namespace"`
+	OtelEndpoint        string `yaml:"otelEndpoint,omitempty"`
+	OtelRedactNamespace string `yaml:"otelRedactNamespace,omitempty"`
+}
+
 func configureTestStore(t *testing.T) {
 	t.Helper()
 
@@ -221,6 +229,59 @@ func TestStoreAppliesContextDefaults(t *testing.T) {
 	}
 	if !ctx.OTLPRedact {
 		t.Fatal("OTLPRedact default = false, want true")
+	}
+}
+
+func TestStoreWithoutBaseRoundTripDoesNotRequireBase(t *testing.T) {
+	configureTestStore(t)
+	store := NewStoreWithoutBase[noBaseContext]()
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(`apiVersion: test.io/context/v1
+current-context: prod
+contexts:
+  prod:
+    server: http://prod:8848
+    username: nacos
+    namespace: public
+    otelEndpoint: http://collector:4318
+    otelRedactNamespace: public-
+`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	SetConfigPath(path)
+
+	cfg, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	ctx := cfg.Contexts["prod"]
+	if ctx.Server != "http://prod:8848" || ctx.Username != "nacos" || ctx.Namespace != "public" || ctx.OtelEndpoint != "http://collector:4318" || ctx.OtelRedactNamespace != "public-" {
+		t.Fatalf("loaded context = %+v", ctx)
+	}
+
+	if err := store.Save(cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	var root yaml.Node
+	if err := yaml.Unmarshal(saved, &root); err != nil {
+		t.Fatalf("Unmarshal(saved) error = %v", err)
+	}
+	prod := mappingValueForTest(mappingValueForTest(root.Content[0], "contexts"), "prod")
+	for _, key := range []string{"server", "username", "namespace", "otelEndpoint", "otelRedactNamespace"} {
+		if mappingValueForTest(prod, key) == nil {
+			t.Fatalf("saved contexts.prod missing key %q; YAML:\n%s", key, saved)
+		}
+	}
+	for _, key := range []string{"backupKeep", "otlpEndpoint", "otlpRedact", "base"} {
+		if mappingValueForTest(prod, key) != nil {
+			t.Fatalf("saved contexts.prod has unexpected key %q; YAML:\n%s", key, saved)
+		}
 	}
 }
 
