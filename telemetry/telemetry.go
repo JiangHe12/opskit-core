@@ -31,12 +31,13 @@ import (
 
 // Config controls package-level OpenTelemetry names.
 type Config struct {
-	ServiceName      string
-	AttributePrefix  string
-	MetricNamePrefix string
+	ServiceName         string
+	AttributePrefix     string
+	MetricNamePrefix    string
+	DomainAttributeName string
 }
 
-var config = Config{ServiceName: "opskit", AttributePrefix: "opskit", MetricNamePrefix: "opskit"}
+var config = Config{ServiceName: "opskit", AttributePrefix: "opskit", MetricNamePrefix: "opskit", DomainAttributeName: "app"}
 
 // Configure sets package-level OpenTelemetry names for a consumer CLI.
 func Configure(next Config) {
@@ -48,6 +49,9 @@ func Configure(next Config) {
 	}
 	if next.MetricNamePrefix != "" {
 		config.MetricNamePrefix = strings.TrimSuffix(next.MetricNamePrefix, "_")
+	}
+	if next.DomainAttributeName != "" {
+		config.DomainAttributeName = strings.Trim(next.DomainAttributeName, ".")
 	}
 }
 
@@ -189,7 +193,7 @@ func SpanAttributes(operator, contextName, env, app, ticket string, protected bo
 		attribute.Bool(prefix+"protected", protected),
 	}
 	if app != "" {
-		attrs = append(attrs, attribute.String(prefix+"app", app))
+		attrs = append(attrs, attribute.String(prefix+config.DomainAttributeName, app))
 	}
 	if ticket != "" {
 		attrs = append(attrs, attribute.String(prefix+"ticket", ticket))

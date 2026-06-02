@@ -40,6 +40,36 @@ func TestSpanAttributesRedaction(t *testing.T) {
 	}
 }
 
+func TestSpanAttributesDomainAttributeName(t *testing.T) {
+	Configure(Config{
+		ServiceName:         "nacos-cli",
+		AttributePrefix:     "nacos",
+		MetricNamePrefix:    "nacos_cli",
+		DomainAttributeName: "namespace",
+	})
+	t.Cleanup(func() {
+		Configure(Config{ServiceName: "opskit", AttributePrefix: "opskit", MetricNamePrefix: "opskit", DomainAttributeName: "app"})
+	})
+
+	attrs := SpanAttributes("alice@company.com", "prod", "prod", "public-ns", "OPS-1234", true, true, "public-")
+	got := attrMap(attrs)
+	if _, ok := got["nacos.app"]; ok {
+		t.Fatalf("unexpected nacos.app attribute: %q", got["nacos.app"])
+	}
+	if got["nacos.namespace"] != "public-ns" {
+		t.Fatalf("whitelisted namespace = %q, want public-ns", got["nacos.namespace"])
+	}
+
+	attrs = SpanAttributes("alice@company.com", "prod", "prod", "private-ns", "OPS-1234", true, true, "public-")
+	got = attrMap(attrs)
+	if got["nacos.namespace"] == "private-ns" {
+		t.Fatalf("namespace was not redacted: %q", got["nacos.namespace"])
+	}
+	if len(got["nacos.namespace"]) != 8 {
+		t.Fatalf("namespace hash length = %d, want 8", len(got["nacos.namespace"]))
+	}
+}
+
 func TestMetricsNoEndpointIsNoop(t *testing.T) {
 	Configure(Config{ServiceName: "sentinel-cli", AttributePrefix: "sentinel", MetricNamePrefix: "sentinel_cli"})
 	t.Cleanup(func() {
