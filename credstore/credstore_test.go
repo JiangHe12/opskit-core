@@ -99,6 +99,33 @@ func TestKeychainAccountPrefixCanBeConfiguredEmpty(t *testing.T) {
 	}
 }
 
+func TestKeychainAccountDefaultIsBareContextName(t *testing.T) {
+	origGet := keychainGet
+	origOptions := options
+	defer func() {
+		keychainGet = origGet
+		options = origOptions
+	}()
+
+	var gotService, gotAccount string
+	keychainGet = func(service, account string) (string, error) {
+		gotService = service
+		gotAccount = account
+		return "stored", nil
+	}
+
+	password, err := (&keychainBackend{}).Get(context.Background(), "prod")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if password != "stored" {
+		t.Fatalf("password = %q, want stored", password)
+	}
+	if gotService != "opskit" || gotAccount != "prod" {
+		t.Fatalf("keychain lookup = service %q account %q, want opskit/prod", gotService, gotAccount)
+	}
+}
+
 func TestVaultPreciseErrorMapping(t *testing.T) {
 	_, err := NewVault(VaultConfig{Path: "secret"}).Get(context.Background(), "ctx")
 	if appErr := apperrors.AsAppError(err); appErr.Code != apperrors.CodeUsageError {

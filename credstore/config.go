@@ -15,7 +15,7 @@ var options = Options{
 	PromptName:            "opskit",
 	ConfigDirName:         ".opskit",
 	KeychainService:       "opskit",
-	KeychainAccountPrefix: "opskit:",
+	KeychainAccountPrefix: "",
 	EncryptedFileMagic:    []byte("OPSKIT01"),
 }
 
