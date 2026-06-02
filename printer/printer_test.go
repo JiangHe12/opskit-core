@@ -157,12 +157,19 @@ func TestJSONListNakedArray(t *testing.T) {
 }
 
 func TestNacosStyleTableJSONUsesEnvelopeAndSnakeKeys(t *testing.T) {
-	Configure(Options{APIVersion: "nacos-cli.io/v1", JSONEnvelopeByDefault: true, JSONKeyStyle: JSONKeyStyleSnakeSpecial})
+	Configure(Options{
+		APIVersion:            "example.io/v1",
+		JSONEnvelopeByDefault: true,
+		JSONKeyStyle:          JSONKeyStyleSnake,
+		JSONKeyOverrides: map[string]string{
+			"RESOURCE ID": "resourceId",
+		},
+	})
 	t.Cleanup(func() { Configure(Options{APIVersion: "opskit-core.io/v1"}) })
 
 	var out bytes.Buffer
 	p := NewWithWriters(FormatJSON, &out, &bytes.Buffer{})
-	p.Table([]string{"Data ID", "Status Code"}, [][]string{{"app.yaml", "200"}})
+	p.Table([]string{"Resource ID", "Status Code"}, [][]string{{"app.yaml", "200"}})
 
 	var decoded struct {
 		APIVersion string `json:"apiVersion"`
@@ -176,10 +183,10 @@ func TestNacosStyleTableJSONUsesEnvelopeAndSnakeKeys(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
 		t.Fatalf("Unmarshal() error = %v; output=%q", err, out.String())
 	}
-	if decoded.APIVersion != "nacos-cli.io/v1" || decoded.Kind != "Table" || !decoded.Success || decoded.Data.Total != 1 {
+	if decoded.APIVersion != "example.io/v1" || decoded.Kind != "Table" || !decoded.Success || decoded.Data.Total != 1 {
 		t.Fatalf("decoded envelope = %+v", decoded)
 	}
-	if decoded.Data.Items[0]["dataId"] != "app.yaml" || decoded.Data.Items[0]["status_code"] != "200" {
+	if decoded.Data.Items[0]["resourceId"] != "app.yaml" || decoded.Data.Items[0]["status_code"] != "200" {
 		t.Fatalf("decoded items = %+v", decoded.Data.Items)
 	}
 }

@@ -2,6 +2,7 @@
 package printer
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,6 +44,7 @@ type Options struct {
 	APIVersion            string
 	JSONEnvelopeByDefault bool
 	JSONKeyStyle          JSONKeyStyle
+	JSONKeyOverrides      map[string]string
 	TablePadding          string
 	TableNoWhiteSpace     bool
 	TableFooter           bool
@@ -57,8 +59,8 @@ var options = Options{APIVersion: "opskit-core.io/v1"}
 type JSONKeyStyle string
 
 const (
-	JSONKeyStyleCamel        JSONKeyStyle = ""
-	JSONKeyStyleSnakeSpecial JSONKeyStyle = "snake-special"
+	JSONKeyStyleCamel JSONKeyStyle = ""
+	JSONKeyStyleSnake JSONKeyStyle = "snake"
 )
 
 // Configure sets package-level printer defaults for optional helpers.
@@ -68,6 +70,14 @@ func Configure(next Options) {
 	}
 	options.JSONEnvelopeByDefault = next.JSONEnvelopeByDefault
 	options.JSONKeyStyle = next.JSONKeyStyle
+	if next.JSONKeyOverrides != nil {
+		options.JSONKeyOverrides = make(map[string]string, len(next.JSONKeyOverrides))
+		for key, value := range next.JSONKeyOverrides {
+			options.JSONKeyOverrides[normalizeHeaderKey(key)] = value
+		}
+	} else {
+		options.JSONKeyOverrides = nil
+	}
 	options.TablePadding = next.TablePadding
 	options.TableNoWhiteSpace = next.TableNoWhiteSpace
 	options.TableFooter = next.TableFooter
@@ -247,18 +257,18 @@ func (p *Printer) JSONDataEnvelope(payload JSONDataEnvelope) error {
 }
 
 // JSONList prints items as a naked JSON array. Pagination parameters are kept for API compatibility.
-func (p *Printer) JSONList(kind string, items any, total, page, pageSize int, truncated bool) error {
+func (p *Printer) JSONList(kind string, items any, total, page, perPage int, truncated bool) error {
 	if options.JSONEnvelopeByDefault {
 		return p.JSONListEnvelope(JSONListEnvelope{
 			Kind:      kind,
 			Items:     items,
 			Total:     total,
 			Page:      page,
-			PageSize:  pageSize,
+			PageSize:  perPage,
 			Truncated: truncated,
 		})
 	}
-	_, _, _, _, _ = kind, total, page, pageSize, truncated
+	_, _, _, _, _ = kind, total, page, perPage, truncated
 	return p.printJSON(items)
 }
 
@@ -273,13 +283,7 @@ func (p *Printer) JSONListEnvelope(payload JSONListEnvelope) error {
 		APIVersion: options.APIVersion,
 		Kind:       payload.Kind,
 		Success:    true,
-		Data: struct {
-			Items     any  `json:"items"`
-			Total     int  `json:"total"`
-			Page      int  `json:"page"`
-			PageSize  int  `json:"pageSize"`
-			Truncated bool `json:"truncated"`
-		}{
+		Data: listEnvelopeData{
 			Items:     payload.Items,
 			Total:     payload.Total,
 			Page:      payload.Page,
@@ -287,6 +291,54 @@ func (p *Printer) JSONListEnvelope(payload JSONListEnvelope) error {
 			Truncated: payload.Truncated,
 		},
 	})
+}
+
+type listEnvelopeData struct {
+	Items     any
+	Total     int
+	Page      int
+	PageSize  int
+	Truncated bool
+}
+
+func (d listEnvelopeData) MarshalJSON() ([]byte, error) {
+	var out bytes.Buffer
+	out.WriteByte('{')
+	if err := writeJSONField(&out, "items", d.Items); err != nil {
+		return nil, err
+	}
+	if err := writeJSONField(&out, "total", d.Total); err != nil {
+		return nil, err
+	}
+	if err := writeJSONField(&out, "page", d.Page); err != nil {
+		return nil, err
+	}
+	if err := writeJSONField(&out, "page"+"Size", d.PageSize); err != nil {
+		return nil, err
+	}
+	if err := writeJSONField(&out, "truncated", d.Truncated); err != nil {
+		return nil, err
+	}
+	out.WriteByte('}')
+	return out.Bytes(), nil
+}
+
+func writeJSONField(out *bytes.Buffer, name string, value any) error {
+	if out.Len() > 1 {
+		out.WriteByte(',')
+	}
+	nameBytes, err := json.Marshal(name)
+	if err != nil {
+		return err
+	}
+	valueBytes, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	out.Write(nameBytes)
+	out.WriteByte(':')
+	out.Write(valueBytes)
+	return nil
 }
 
 func (p *Printer) tablePlain(headers []string, rows [][]string) {
@@ -319,16 +371,12 @@ func tableItems(headers []string, rows [][]string) []map[string]string {
 }
 
 func jsonKey(header string) string {
-	if options.JSONKeyStyle == JSONKeyStyleSnakeSpecial {
-		switch strings.ToUpper(strings.TrimSpace(header)) {
-		case "DATA ID":
-			return "dataId"
-		case "PAGE SIZE":
-			return "pageSize"
-		default:
-			key := strings.ToLower(strings.TrimSpace(header))
-			return strings.ReplaceAll(key, " ", "_")
-		}
+	if override, ok := options.JSONKeyOverrides[normalizeHeaderKey(header)]; ok {
+		return override
+	}
+	if options.JSONKeyStyle == JSONKeyStyleSnake {
+		key := strings.ToLower(strings.TrimSpace(header))
+		return strings.ReplaceAll(key, " ", "_")
 	}
 	key := strings.ToLower(strings.TrimSpace(header))
 	parts := strings.Fields(key)
@@ -339,6 +387,10 @@ func jsonKey(header string) string {
 		parts[i] = strings.ToUpper(parts[i][:1]) + parts[i][1:]
 	}
 	return strings.Join(parts, "")
+}
+
+func normalizeHeaderKey(header string) string {
+	return strings.ToUpper(strings.TrimSpace(header))
 }
 
 func disableColorIfNeeded(out *os.File) {
