@@ -23,9 +23,11 @@ const (
 )
 
 var (
-	colorTitle   = color.New(color.FgCyan, color.Bold)
-	colorSuccess = color.New(color.FgGreen, color.Bold)
-	colorDim     = color.New(color.Faint)
+	ColorTitle   = color.New(color.FgCyan, color.Bold)
+	ColorSuccess = color.New(color.FgGreen, color.Bold)
+	ColorWarn    = color.New(color.FgYellow)
+	ColorError   = color.New(color.FgRed, color.Bold)
+	ColorDim     = color.New(color.Faint)
 )
 
 // Printer controls command output.
@@ -38,16 +40,40 @@ type Printer struct {
 
 // Options controls optional printer response metadata.
 type Options struct {
-	APIVersion string
+	APIVersion            string
+	JSONEnvelopeByDefault bool
+	JSONKeyStyle          JSONKeyStyle
+	TablePadding          string
+	TableNoWhiteSpace     bool
+	TableFooter           bool
+	TableHeaderColor      bool
+	DecoratedKVTable      bool
+	DecoratedContent      bool
 }
 
 var options = Options{APIVersion: "opskit-core.io/v1"}
+
+// JSONKeyStyle controls how table/KV labels are converted to JSON keys.
+type JSONKeyStyle string
+
+const (
+	JSONKeyStyleCamel        JSONKeyStyle = ""
+	JSONKeyStyleSnakeSpecial JSONKeyStyle = "snake-special"
+)
 
 // Configure sets package-level printer defaults for optional helpers.
 func Configure(next Options) {
 	if next.APIVersion != "" {
 		options.APIVersion = next.APIVersion
 	}
+	options.JSONEnvelopeByDefault = next.JSONEnvelopeByDefault
+	options.JSONKeyStyle = next.JSONKeyStyle
+	options.TablePadding = next.TablePadding
+	options.TableNoWhiteSpace = next.TableNoWhiteSpace
+	options.TableFooter = next.TableFooter
+	options.TableHeaderColor = next.TableHeaderColor
+	options.DecoratedKVTable = next.DecoratedKVTable
+	options.DecoratedContent = next.DecoratedContent
 }
 
 // JSONDataEnvelope is an opt-in enveloped single-object JSON response.
@@ -79,7 +105,17 @@ func NewWithWriters(format Format, out, errOut io.Writer) *Printer {
 
 // Success prints a success message.
 func (p *Printer) Success(msg string) {
-	_, _ = colorSuccess.Fprintln(p.Out, "✓ "+msg)
+	_, _ = ColorSuccess.Fprintln(p.Out, "✓ "+msg)
+}
+
+// Error prints an error message to stderr.
+func (p *Printer) Error(msg string) {
+	_, _ = ColorError.Fprintln(p.Err, "✗ "+msg)
+}
+
+// Warn prints a warning message to stderr.
+func (p *Printer) Warn(msg string) {
+	_, _ = ColorWarn.Fprintln(p.Err, msg)
 }
 
 // Info prints a plain message.
@@ -94,7 +130,7 @@ func (p *Printer) Table(headers []string, rows [][]string) {
 		table := tablewriter.NewWriter(p.Out)
 		colored := make([]string, len(headers))
 		for i, h := range headers {
-			colored[i] = colorTitle.Sprint(h)
+			colored[i] = ColorTitle.Sprint(h)
 		}
 		table.SetHeader(colored)
 		table.SetAutoWrapText(false)
@@ -104,6 +140,19 @@ func (p *Printer) Table(headers []string, rows [][]string) {
 		table.SetBorder(false)
 		table.SetColumnSeparator("  ")
 		table.SetHeaderLine(true)
+		if options.TablePadding != "" {
+			table.SetTablePadding(options.TablePadding)
+		}
+		if options.TableNoWhiteSpace {
+			table.SetNoWhiteSpace(true)
+		}
+		if options.TableHeaderColor {
+			headerColors := make([]tablewriter.Colors, len(headers))
+			for i := range headers {
+				headerColors[i] = tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor}
+			}
+			table.SetHeaderColor(headerColors...)
+		}
 		for i, row := range rows {
 			if i%2 == 0 {
 				table.Append(row)
@@ -111,11 +160,14 @@ func (p *Printer) Table(headers []string, rows [][]string) {
 			}
 			dimmed := make([]string, len(row))
 			for j, cell := range row {
-				dimmed[j] = colorDim.Sprint(cell)
+				dimmed[j] = ColorDim.Sprint(cell)
 			}
 			table.Append(dimmed)
 		}
 		table.Render()
+		if options.TableFooter {
+			_, _ = ColorDim.Fprintf(p.Out, "\n  Total: %d item(s)\n", len(rows))
+		}
 	case FormatJSON:
 		_ = p.JSONList("Table", tableItems(headers, rows), len(rows), 1, len(rows), false)
 	case FormatPlain:
@@ -133,13 +185,48 @@ func (p *Printer) KV(pairs [][2]string) {
 		_ = p.JSONData("Object", m)
 		return
 	}
+	if p.Format == FormatTable && options.DecoratedKVTable {
+		maxKey := 0
+		for _, pair := range pairs {
+			if len(pair[0]) > maxKey {
+				maxKey = len(pair[0])
+			}
+		}
+		for _, pair := range pairs {
+			key := ColorTitle.Sprintf("%-*s", maxKey, pair[0])
+			_, _ = fmt.Fprintf(p.Out, "  %s  %s\n", key, pair[1])
+		}
+		return
+	}
 	for _, pair := range pairs {
 		_, _ = fmt.Fprintf(p.Out, "%s\t%s\n", pair[0], pair[1])
 	}
 }
 
+// Content prints a titled content block.
+func (p *Printer) Content(title, content string) {
+	if p.Format == FormatJSON {
+		_ = p.JSONData("Content", map[string]string{"title": title, "content": content})
+		return
+	}
+	if p.Format == FormatPlain {
+		_, _ = fmt.Fprint(p.Out, content)
+		return
+	}
+	if options.DecoratedContent {
+		_, _ = ColorTitle.Fprintf(p.Out, "── %s ──\n", title)
+		_, _ = fmt.Fprintln(p.Out, content)
+		_, _ = ColorDim.Fprintf(p.Out, "── end ──\n")
+		return
+	}
+	_, _ = fmt.Fprint(p.Out, content)
+}
+
 // JSONData prints data as naked JSON. The kind parameter is kept for future extension.
 func (p *Printer) JSONData(kind string, data any) error {
+	if options.JSONEnvelopeByDefault {
+		return p.JSONDataEnvelope(JSONDataEnvelope{Kind: kind, Data: data})
+	}
 	_ = kind
 	return p.printJSON(data)
 }
@@ -161,6 +248,16 @@ func (p *Printer) JSONDataEnvelope(payload JSONDataEnvelope) error {
 
 // JSONList prints items as a naked JSON array. Pagination parameters are kept for API compatibility.
 func (p *Printer) JSONList(kind string, items any, total, page, pageSize int, truncated bool) error {
+	if options.JSONEnvelopeByDefault {
+		return p.JSONListEnvelope(JSONListEnvelope{
+			Kind:      kind,
+			Items:     items,
+			Total:     total,
+			Page:      page,
+			PageSize:  pageSize,
+			Truncated: truncated,
+		})
+	}
 	_, _, _, _, _ = kind, total, page, pageSize, truncated
 	return p.printJSON(items)
 }
@@ -222,6 +319,17 @@ func tableItems(headers []string, rows [][]string) []map[string]string {
 }
 
 func jsonKey(header string) string {
+	if options.JSONKeyStyle == JSONKeyStyleSnakeSpecial {
+		switch strings.ToUpper(strings.TrimSpace(header)) {
+		case "DATA ID":
+			return "dataId"
+		case "PAGE SIZE":
+			return "pageSize"
+		default:
+			key := strings.ToLower(strings.TrimSpace(header))
+			return strings.ReplaceAll(key, " ", "_")
+		}
+	}
 	key := strings.ToLower(strings.TrimSpace(header))
 	parts := strings.Fields(key)
 	if len(parts) == 0 {

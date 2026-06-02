@@ -72,6 +72,30 @@ func TestJSONDataEnvelopeUsesConfiguredAPIVersion(t *testing.T) {
 	}
 }
 
+func TestNacosStyleJSONDataUsesEnvelopeByDefault(t *testing.T) {
+	Configure(Options{APIVersion: "nacos-cli.io/v1", JSONEnvelopeByDefault: true})
+	t.Cleanup(func() { Configure(Options{APIVersion: "opskit-core.io/v1"}) })
+
+	var out bytes.Buffer
+	p := NewWithWriters(FormatJSON, &out, &bytes.Buffer{})
+	if err := p.JSONData("ConfigItem", map[string]string{"key": "value"}); err != nil {
+		t.Fatalf("JSONData() error = %v", err)
+	}
+
+	var decoded struct {
+		APIVersion string            `json:"apiVersion"`
+		Kind       string            `json:"kind"`
+		Success    bool              `json:"success"`
+		Data       map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v; output = %s", err, out.String())
+	}
+	if decoded.APIVersion != "nacos-cli.io/v1" || decoded.Kind != "ConfigItem" || !decoded.Success || decoded.Data["key"] != "value" {
+		t.Fatalf("decoded = %+v", decoded)
+	}
+}
+
 func TestJSONListEnvelopeWrapsPagination(t *testing.T) {
 	Configure(Options{APIVersion: "example.io/v1"})
 	t.Cleanup(func() { Configure(Options{APIVersion: "opskit-core.io/v1"}) })
@@ -132,6 +156,34 @@ func TestJSONListNakedArray(t *testing.T) {
 	}
 }
 
+func TestNacosStyleTableJSONUsesEnvelopeAndSnakeKeys(t *testing.T) {
+	Configure(Options{APIVersion: "nacos-cli.io/v1", JSONEnvelopeByDefault: true, JSONKeyStyle: JSONKeyStyleSnakeSpecial})
+	t.Cleanup(func() { Configure(Options{APIVersion: "opskit-core.io/v1"}) })
+
+	var out bytes.Buffer
+	p := NewWithWriters(FormatJSON, &out, &bytes.Buffer{})
+	p.Table([]string{"Data ID", "Status Code"}, [][]string{{"app.yaml", "200"}})
+
+	var decoded struct {
+		APIVersion string `json:"apiVersion"`
+		Kind       string `json:"kind"`
+		Success    bool   `json:"success"`
+		Data       struct {
+			Items []map[string]string `json:"items"`
+			Total int                 `json:"total"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v; output=%q", err, out.String())
+	}
+	if decoded.APIVersion != "nacos-cli.io/v1" || decoded.Kind != "Table" || !decoded.Success || decoded.Data.Total != 1 {
+		t.Fatalf("decoded envelope = %+v", decoded)
+	}
+	if decoded.Data.Items[0]["dataId"] != "app.yaml" || decoded.Data.Items[0]["status_code"] != "200" {
+		t.Fatalf("decoded items = %+v", decoded.Data.Items)
+	}
+}
+
 func TestTableOutputContainsRows(t *testing.T) {
 	var out bytes.Buffer
 	p := NewWithWriters(FormatTable, &out, &bytes.Buffer{})
@@ -189,6 +241,42 @@ func TestKVPlainFormat(t *testing.T) {
 	p.KV([][2]string{{"Key", "value123"}})
 	if !strings.Contains(out.String(), "Key") || !strings.Contains(out.String(), "value123") {
 		t.Fatalf("KV plain = %q", out.String())
+	}
+}
+
+func TestNacosStyleKVTableAndContentAndMessages(t *testing.T) {
+	Configure(Options{DecoratedKVTable: true, DecoratedContent: true})
+	t.Cleanup(func() { Configure(Options{APIVersion: "opskit-core.io/v1"}) })
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	p := NewWithWriters(FormatTable, &out, &errOut)
+	p.KV([][2]string{{"Key", "value123"}})
+	p.Content("app.yml", "hello")
+	p.Warn("warning")
+	p.Error("failed")
+
+	got := out.String()
+	if !strings.Contains(got, "Key") || !strings.Contains(got, "value123") {
+		t.Fatalf("decorated KV table = %q", got)
+	}
+	if !strings.Contains(got, "── app.yml ──") || !strings.Contains(got, "── end ──") {
+		t.Fatalf("decorated content = %q", got)
+	}
+	if !strings.Contains(errOut.String(), "warning") || !strings.Contains(errOut.String(), "failed") {
+		t.Fatalf("stderr = %q", errOut.String())
+	}
+}
+
+func TestNacosStyleTableFooter(t *testing.T) {
+	Configure(Options{TablePadding: "  ", TableNoWhiteSpace: true, TableFooter: true, TableHeaderColor: true})
+	t.Cleanup(func() { Configure(Options{APIVersion: "opskit-core.io/v1"}) })
+
+	var out bytes.Buffer
+	p := NewWithWriters(FormatTable, &out, &bytes.Buffer{})
+	p.Table([]string{"Name"}, [][]string{{"app"}, {"api"}})
+	if !strings.Contains(out.String(), "Total: 2 item(s)") {
+		t.Fatalf("table footer missing: %q", out.String())
 	}
 }
 
