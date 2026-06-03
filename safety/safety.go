@@ -52,17 +52,17 @@ type TicketValidator interface {
 
 // Options controls authorization.
 type Options struct {
-	Yes               bool
-	NonInteractive    bool
-	Ticket            string
-	TicketPattern     string
-	Validator         TicketValidator
-	RequiredAllowFlag AllowFlag
-	GrantedAllowFlags map[AllowFlag]bool
-	Stdin             io.Reader
-	Stdout            io.Writer
-	Roles             map[string]string // from ContextMeta.Roles
-	Operator          string            // current operator identity
+	Yes                bool
+	NonInteractive     bool
+	Ticket             string
+	TicketPattern      string
+	Validator          TicketValidator
+	RequiredAllowFlags []AllowFlag
+	GrantedAllowFlags  map[AllowFlag]bool
+	Stdin              io.Reader
+	Stdout             io.Writer
+	Roles              map[string]string // from ContextMeta.Roles
+	Operator           string            // current operator identity
 }
 
 // Config controls package-level text and environment defaults.
@@ -126,11 +126,13 @@ func Authorize(risk Risk, opts Options) error {
 		}
 	}
 	if risk == R3 {
-		if opts.RequiredAllowFlag == "" {
+		if len(opts.RequiredAllowFlags) == 0 {
 			return authorizationError("R3 authorization requires an allow flag")
 		}
-		if !opts.GrantedAllowFlags[opts.RequiredAllowFlag] {
-			return authorizationError(fmt.Sprintf("authorization requires --%s", opts.RequiredAllowFlag))
+		for _, flag := range opts.RequiredAllowFlags {
+			if !opts.GrantedAllowFlags[flag] {
+				return authorizationError(fmt.Sprintf("authorization requires --%s", flag))
+			}
 		}
 	}
 	if opts.Yes {

@@ -5,7 +5,10 @@ import (
 	"testing"
 )
 
-const allowProductionDelete AllowFlag = "allow-production-delete"
+const (
+	allowProductionDelete AllowFlag = "allow-production-delete"
+	allowProductionPrune  AllowFlag = "allow-production-prune"
+)
 
 func TestEffectiveRiskProtectedContext(t *testing.T) {
 	if got := EffectiveRisk(R1, ContextMeta{Protected: true}); got != R2 {
@@ -32,13 +35,34 @@ func TestAuthorizeNonInteractiveAndTicket(t *testing.T) {
 }
 
 func TestAuthorizeR3RequiresAllowFlag(t *testing.T) {
-	opts := Options{NonInteractive: true, Yes: true, Ticket: "OPS-1", RequiredAllowFlag: allowProductionDelete}
+	opts := Options{NonInteractive: true, Yes: true, Ticket: "OPS-1", RequiredAllowFlags: []AllowFlag{allowProductionDelete}}
 	if err := Authorize(R3, opts); err == nil {
 		t.Fatal("Authorize(R3 missing flag) error = nil, want error")
 	}
 	opts.GrantedAllowFlags = map[AllowFlag]bool{allowProductionDelete: true}
 	if err := Authorize(R3, opts); err != nil {
 		t.Fatalf("Authorize(R3) error = %v", err)
+	}
+}
+
+func TestAuthorizeR3RequiresAllAllowFlags(t *testing.T) {
+	opts := Options{
+		NonInteractive:     true,
+		Yes:                true,
+		Ticket:             "OPS-1",
+		RequiredAllowFlags: []AllowFlag{allowProductionDelete, allowProductionPrune},
+		GrantedAllowFlags:  map[AllowFlag]bool{allowProductionDelete: true},
+	}
+	err := Authorize(R3, opts)
+	if err == nil {
+		t.Fatal("Authorize(R3 missing one of multiple flags) error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "authorization requires --allow-production-prune") {
+		t.Fatalf("Authorize(R3) error = %v, want missing prune allow flag", err)
+	}
+	opts.GrantedAllowFlags[allowProductionPrune] = true
+	if err := Authorize(R3, opts); err != nil {
+		t.Fatalf("Authorize(R3 all flags) error = %v", err)
 	}
 }
 
@@ -78,13 +102,13 @@ func TestAuthorizeRBACWriterCannotDoR3(t *testing.T) {
 	}
 	// Writer cannot do R3.
 	writerR3 := Options{
-		Operator:          "alice",
-		Roles:             roles,
-		Yes:               true,
-		NonInteractive:    true,
-		Ticket:            "OPS-1",
-		RequiredAllowFlag: allowProductionDelete,
-		GrantedAllowFlags: map[AllowFlag]bool{allowProductionDelete: true},
+		Operator:           "alice",
+		Roles:              roles,
+		Yes:                true,
+		NonInteractive:     true,
+		Ticket:             "OPS-1",
+		RequiredAllowFlags: []AllowFlag{allowProductionDelete},
+		GrantedAllowFlags:  map[AllowFlag]bool{allowProductionDelete: true},
 	}
 	if err := Authorize(R3, writerR3); err == nil {
 		t.Fatal("writer R3 should be denied")
@@ -94,13 +118,13 @@ func TestAuthorizeRBACWriterCannotDoR3(t *testing.T) {
 func TestAuthorizeRBACAdminCanDoR3(t *testing.T) {
 	roles := map[string]string{"alice": RoleAdmin}
 	if err := Authorize(R3, Options{
-		Operator:          "alice",
-		Roles:             roles,
-		Yes:               true,
-		NonInteractive:    true,
-		Ticket:            "OPS-1",
-		RequiredAllowFlag: allowProductionDelete,
-		GrantedAllowFlags: map[AllowFlag]bool{allowProductionDelete: true},
+		Operator:           "alice",
+		Roles:              roles,
+		Yes:                true,
+		NonInteractive:     true,
+		Ticket:             "OPS-1",
+		RequiredAllowFlags: []AllowFlag{allowProductionDelete},
+		GrantedAllowFlags:  map[AllowFlag]bool{allowProductionDelete: true},
 	}); err != nil {
 		t.Fatalf("admin R3 should pass: %v", err)
 	}
@@ -119,9 +143,9 @@ func TestRBACRejectsEmptyOperatorWhenRolesConfigured(t *testing.T) {
 
 func TestAuthorizeR3RequiresYesAfterAllowFlag(t *testing.T) {
 	base := Options{
-		Ticket:            "OPS-1",
-		RequiredAllowFlag: allowProductionDelete,
-		GrantedAllowFlags: map[AllowFlag]bool{allowProductionDelete: true},
+		Ticket:             "OPS-1",
+		RequiredAllowFlags: []AllowFlag{allowProductionDelete},
+		GrantedAllowFlags:  map[AllowFlag]bool{allowProductionDelete: true},
 	}
 
 	noYesNonInteractive := base
