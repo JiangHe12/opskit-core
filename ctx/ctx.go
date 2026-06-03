@@ -396,7 +396,7 @@ func enforceContextFileMode(path string) error {
 		return enforceWindowsContextFileACL(path)
 	}
 	if info.Mode().Perm()&0o077 != 0 {
-		return apperrors.New(apperrors.CodeLocalIOError, fmt.Sprintf("context file %s has insecure mode %#o", path, info.Mode().Perm()), nil)
+		return apperrors.New(apperrors.CodeAuthFailed, fmt.Sprintf("context file %s has insecure mode %#o; run: chmod 600 %s", path, info.Mode().Perm(), path), nil)
 	}
 	return checkFileOwner(info, path)
 }

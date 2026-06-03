@@ -13,7 +13,7 @@ the hard parts.
 ## Install
 
 ```sh
-go get github.com/JiangHe12/opskit-core@v1.0.0
+go get github.com/JiangHe12/opskit-core@v1.0.1
 ```
 
 Requires Go 1.25+.
