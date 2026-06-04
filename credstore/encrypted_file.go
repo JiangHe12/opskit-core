@@ -238,7 +238,7 @@ func masterPassphrase() ([]byte, error) {
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return nil, apperrors.New(apperrors.CodeAuthorizationRequired, fmt.Sprintf("encrypted-file backend requires %s env", options.MasterPasswordEnv), nil)
 	}
-	_, _ = fmt.Fprint(os.Stderr, fmt.Sprintf("Enter %s master password: ", options.PromptName))
+	_, _ = fmt.Fprintf(os.Stderr, "Enter %s master password: ", options.PromptName)
 	value, err := term.ReadPassword(int(os.Stdin.Fd()))
 	_, _ = fmt.Fprintln(os.Stderr)
 	if err != nil {

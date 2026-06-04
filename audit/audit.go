@@ -244,10 +244,6 @@ func AppendRecord(path string, record any, opts Options) error {
 	return nil
 }
 
-func encodeEventLine(event Event, publicKeyPath string) ([]byte, error) {
-	return encodeRecordLine(event, publicKeyPath)
-}
-
 func encodeRecordLine(record any, publicKeyPath string) ([]byte, error) {
 	plain, err := json.Marshal(record)
 	if err != nil {
