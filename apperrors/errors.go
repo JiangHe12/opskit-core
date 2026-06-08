@@ -351,6 +351,7 @@ func isCobraParserError(err error) bool {
 		strings.HasPrefix(msg, "flag needs an argument") ||
 		strings.HasPrefix(msg, "invalid argument") ||
 		strings.HasPrefix(msg, "bad flag syntax") ||
+		strings.HasPrefix(msg, "requires at least ") ||
 		strings.HasPrefix(msg, "accepts ")
 }
 

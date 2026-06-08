@@ -141,12 +141,22 @@ func TestAsAppErrorFromNetworkError(t *testing.T) {
 }
 
 func TestAsAppErrorFromCobraParserError(t *testing.T) {
-	got := AsAppError(errors.New(`unknown flag: --bad`))
-	if got.Code != CodeUsageError {
-		t.Fatalf("Code = %s, want %s", got.Code, CodeUsageError)
-	}
-	if got.Error() != `unknown flag: --bad` {
-		t.Fatalf("Error() = %q", got.Error())
+	for _, msg := range []string{
+		`unknown flag: --bad`,
+		`requires at least 1 arg(s), only received 0`,
+	} {
+		t.Run(msg, func(t *testing.T) {
+			got := AsAppError(errors.New(msg))
+			if got.Code != CodeUsageError {
+				t.Fatalf("Code = %s, want %s", got.Code, CodeUsageError)
+			}
+			if exit := ExitCode(got); exit != 1 {
+				t.Fatalf("ExitCode() = %d, want 1", exit)
+			}
+			if got.Error() != msg {
+				t.Fatalf("Error() = %q", got.Error())
+			}
+		})
 	}
 }
 
