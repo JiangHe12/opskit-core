@@ -27,6 +27,7 @@ Requires Go 1.25+.
 | `ctx` | Context configuration store: per-context settings, per-operator roles, and literal/credstore-referenced password resolution. |
 | `credstore` | Pluggable credential backends — `plain-yaml`, `encrypted-file`, OS `keychain`, and `vault` — plus credential reference encoding. |
 | `printer` | `table` / `json` / `plain` output with a configurable API-version envelope. |
+| `redact` | Context-free secret redaction for caller output and audit records. |
 | `telemetry` | OpenTelemetry tracing and metrics with per-CLI service/attribute/metric prefixes. |
 | `apperrors` | Typed error codes shared across the family. |
 | `lockfile` | Advisory lock file for serializing mutating operations. |
