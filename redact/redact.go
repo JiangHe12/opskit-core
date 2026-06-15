@@ -21,8 +21,44 @@ var patterns = []struct {
 		replacement: replacement,
 	},
 	{
+		re:          regexp.MustCompile(`\bASIA[0-9A-Z]{16}\b`),
+		replacement: replacement,
+	},
+	{
 		re:          regexp.MustCompile(`\beyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+`),
 		replacement: replacement,
+	},
+	{
+		re:          regexp.MustCompile(`\bsk-(?:[a-z]+-)?[A-Za-z0-9]{20,}`),
+		replacement: replacement,
+	},
+	{
+		re:          regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}`),
+		replacement: replacement,
+	},
+	{
+		re:          regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{40,}`),
+		replacement: replacement,
+	},
+	{
+		re:          regexp.MustCompile(`\bxox[baprs]-[A-Za-z0-9-]{10,}`),
+		replacement: replacement,
+	},
+	{
+		re:          regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`),
+		replacement: replacement,
+	},
+	{
+		re:          regexp.MustCompile(`\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}`),
+		replacement: replacement,
+	},
+	{
+		re:          regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.\-]*://[^:/?#\s@]*:)([^@/?#\s]+)(@)`),
+		replacement: `${1}` + replacement + `${3}`,
+	},
+	{
+		re:          regexp.MustCompile(`(?i)(\bBearer\s+)[A-Za-z0-9._~+/\-]{16,}=*`),
+		replacement: `${1}` + replacement,
 	},
 	{
 		re: regexp.MustCompile(
@@ -33,8 +69,30 @@ var patterns = []struct {
 }
 
 var assignmentRE = regexp.MustCompile(
-	`(^|[^A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(\s*[:=]\s*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)`,
+	`(^|[^A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(\s*[:=]\s*)((?i:(?:Bearer|Basic)\s+(?:\[REDACTED\]|[^\s,;]+))|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)`,
 )
+
+var atomicSensitiveKeyWords = map[string]bool{
+	"password":      true,
+	"passwd":        true,
+	"pwd":           true,
+	"secret":        true,
+	"token":         true,
+	"credential":    true,
+	"credentials":   true,
+	"passphrase":    true,
+	"apikey":        true,
+	"privatekey":    true,
+	"accesskey":     true,
+	"secretkey":     true,
+	"authtoken":     true,
+	"clientsecret":  true,
+	"cookie":        true,
+	"sessionid":     true,
+	"authorization": true,
+	"jsessionid":    true,
+	"phpsessid":     true,
+}
 
 var harmlessKeyNames = map[string]bool{
 	"key":             true,
@@ -62,7 +120,6 @@ var harmlessKeyNames = map[string]bool{
 
 // String returns value with recognized secrets replaced. It is intentionally
 // context-free so the same function can guard caller output and audit records.
-// Bearer tokens and opaque API keys such as sk-/ghp_ are known gaps for a later extension.
 func String(value string) string {
 	for _, pattern := range patterns {
 		value = pattern.re.ReplaceAllString(value, pattern.replacement)
@@ -76,6 +133,9 @@ func redactAssignment(candidate string) string {
 		return candidate
 	}
 	if isSensitiveKey(parts[2]) {
+		if strings.EqualFold(strings.TrimSpace(parts[4]), "Bearer "+replacement) {
+			return candidate
+		}
 		return parts[1] + parts[2] + parts[3] + replacement
 	}
 	return parts[1] + parts[2] + parts[3] + String(parts[4])
@@ -88,14 +148,15 @@ func isSensitiveKey(key string) bool {
 	for _, rawWord := range words {
 		word := strings.ToLower(rawWord)
 		normalizedWords = append(normalizedWords, word)
-		switch word {
-		case "password", "passwd", "pwd", "secret", "token", "credential", "credentials",
-			"passphrase", "apikey", "privatekey", "accesskey", "secretkey", "authtoken",
-			"clientsecret", "cookie", "sessionid":
+		if atomicSensitiveKeyWords[word] {
 			return true
-		case "key":
+		}
+		if word == "key" {
 			hasKey = true
 		}
+	}
+	if atomicSensitiveKeyWords[strings.Join(normalizedWords, "")] {
+		return true
 	}
 	if !hasKey {
 		return false

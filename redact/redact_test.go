@@ -201,6 +201,9 @@ func TestStringSensitiveKeyTruthTable(t *testing.T) {
 		"SENTRY_KEY",
 		"cookie",
 		"sessionid",
+		"authorization",
+		"jsessionid",
+		"phpsessid",
 		"AWS_SECRET_ACCESS_KEY",
 		"X-Api-Key",
 	}
@@ -287,6 +290,133 @@ func TestStringRedactsFlagValues(t *testing.T) {
 			}
 			if strings.Contains(got, tt.mustNotSee) {
 				t.Fatalf("String() leaked %q in %q", tt.mustNotSee, got)
+			}
+		})
+	}
+}
+
+func TestStringValuePatternTruthTable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "openai key",
+			input: "token sk-" + strings.Repeat("a", 20),
+			want:  "token [REDACTED]",
+		},
+		{
+			name:  "openai project key",
+			input: "token sk-proj-" + strings.Repeat("b", 20),
+			want:  "token [REDACTED]",
+		},
+		{
+			name:  "github classic token",
+			input: "token ghp_" + strings.Repeat("c", 36),
+			want:  "token [REDACTED]",
+		},
+		{
+			name:  "github fine grained token",
+			input: "token github_pat_" + strings.Repeat("d", 40),
+			want:  "token [REDACTED]",
+		},
+		{
+			name:  "slack token",
+			input: "token xoxb-" + strings.Repeat("e", 10),
+			want:  "token [REDACTED]",
+		},
+		{
+			name:  "google api key",
+			input: "token AIza" + strings.Repeat("f", 35),
+			want:  "token [REDACTED]",
+		},
+		{
+			name:  "stripe secret key",
+			input: "token sk_live_" + strings.Repeat("g", 16),
+			want:  "token [REDACTED]",
+		},
+		{
+			name:  "stripe restricted test key",
+			input: "token rk_test_" + strings.Repeat("h", 16),
+			want:  "token [REDACTED]",
+		},
+		{
+			name:  "aws temporary access key",
+			input: "token ASIA" + strings.Repeat("H", 16),
+			want:  "token [REDACTED]",
+		},
+		{
+			name:  "url credentials",
+			input: "mysql://admin:s3cr3t@db:3306/app",
+			want:  "mysql://admin:[REDACTED]@db:3306/app",
+		},
+		{
+			name:  "url credentials without username",
+			input: "redis://:pw@h",
+			want:  "redis://:[REDACTED]@h",
+		},
+		{
+			name:  "authorization bearer",
+			input: "Authorization: Bearer aaaaaaaaaaaaaaaa1",
+			want:  "Authorization: Bearer [REDACTED]",
+		},
+		{
+			name:  "bare bearer",
+			input: "bearer aaaaaaaaaaaaaaaa1",
+			want:  "bearer [REDACTED]",
+		},
+		{
+			name:  "snake session id",
+			input: "session_id=abc",
+			want:  "session_id=[REDACTED]",
+		},
+		{
+			name:  "camel session id",
+			input: "sessionId=abc",
+			want:  "sessionId=[REDACTED]",
+		},
+		{
+			name:  "authorization assignment",
+			input: "Authorization=Basic xyz",
+			want:  "Authorization=[REDACTED]",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := String(tt.input); got != tt.want {
+				t.Fatalf("String(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStringValuePatternFalsePositives(t *testing.T) {
+	t.Parallel()
+
+	tests := []string{
+		"task-management-system-config-v2",
+		"https://github.com/u/repo",
+		"http://host:8080/path",
+		"bearer of bad news",
+		"session_timeout=30",
+		"user_id=42",
+		"primary_key=value",
+		"public_key=value",
+		"passwordless=true",
+		"tokenizer=ready",
+		"pk_live_xxx",
+	}
+
+	for _, input := range tests {
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+			if got := String(input); got != input {
+				t.Fatalf("String(%q) = %q, want unchanged", input, got)
 			}
 		})
 	}
