@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.1.0
+
+### Added
+
+- Added the shared `trust` package providing transport-neutral
+  trust-on-first-use (TOFU) pin storage: a lock-guarded, permission-hardened pin
+  store with first-use pinning, same-algorithm material-change detection,
+  algorithm-change detection, and a non-mutating permission checker. Lets family
+  CLIs pin SSH host keys and TLS certificate material on a common, audited store
+  instead of reimplementing trust-on-first-use per tool.
+
 ## v1.0.5
 
 ### Added
