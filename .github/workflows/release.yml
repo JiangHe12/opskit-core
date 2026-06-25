@@ -1,0 +1,48 @@
+name: Release
+
+# opskit-core is a Go module (no binaries / cosign / npm). A pushed tag already
+# IS the module release once proxy.golang.org serves it; this workflow only adds
+# the human-facing GitHub Release so the Releases page stays in sync with tags.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache: true
+      - run: go vet ./...
+      - run: go test ./... -count=1
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Extract changelog section
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          BODY=$(awk "/^## ${VERSION}$/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md)
+          if [ -z "$BODY" ]; then
+            BODY="See CHANGELOG.md for details."
+          fi
+          echo "$BODY" > release_notes.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          body_path: release_notes.md
