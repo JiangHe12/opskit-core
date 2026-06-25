@@ -1,10 +1,11 @@
 # Onboarding a new CLI onto opskit-core
 
-This is the contract for building a new governed operations CLI (e.g. `es-cli`,
-`mq-cli`) on top of `opskit-core`, so it behaves like the rest of the family
-([sentinel-cli](https://github.com/JiangHe12/sentinel-cli),
-[nacos-cli](https://github.com/JiangHe12/nacos-cli),
-[dbgov-cli](https://github.com/JiangHe12/dbgov-cli)).
+This is the contract for building a new governed operations CLI (e.g. `es-cli`)
+on top of `opskit-core`, so it behaves like the rest of the family
+([dbgov-cli](https://github.com/JiangHe12/dbgov-cli),
+[srvgov-cli](https://github.com/JiangHe12/srvgov-cli),
+[cfgov-cli](https://github.com/JiangHe12/cfgov-cli),
+[mqgov-cli](https://github.com/JiangHe12/mqgov-cli)).
 
 The rule of thumb: **opskit-core is the engine; your CLI injects its own domain
 types and text and keeps its own audit record shape.** You do not fork core, and
@@ -83,7 +84,7 @@ Follow the family canon exactly:
 
 ## 6. Match the engineering setup
 
-Mirror the family repo infrastructure (see dbgov-cli / nacos-cli):
+Mirror the family repo infrastructure (see dbgov-cli / mqgov-cli):
 
 - `.github/workflows/ci.yml` — gofmt, vet, build, `go test -count=1`, race, golangci-lint, govulncheck, an opt-in real-backend integration job.
 - `.github/workflows/release.yml` — tag-triggered matrix build with version ldflags, cosign signing, checksums, GitHub Release, `npm publish --provenance`.
