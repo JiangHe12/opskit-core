@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.3
+
+### Added
+
+- Extended list JSON envelopes with an optional operation target field, preserving
+  existing output when no target is supplied.
+
 ## v1.1.2
 
 ### Added

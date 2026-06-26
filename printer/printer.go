@@ -100,6 +100,7 @@ type JSONListEnvelope struct {
 	Page      int
 	PageSize  int
 	Truncated bool
+	Target    any
 }
 
 type targetData struct {
@@ -313,6 +314,7 @@ func (p *Printer) JSONListEnvelope(payload JSONListEnvelope) error {
 			Page:      payload.Page,
 			PageSize:  payload.PageSize,
 			Truncated: payload.Truncated,
+			Target:    payload.Target,
 		},
 	})
 }
@@ -323,6 +325,7 @@ type listEnvelopeData struct {
 	Page      int
 	PageSize  int
 	Truncated bool
+	Target    any
 }
 
 func (d listEnvelopeData) MarshalJSON() ([]byte, error) {
@@ -342,6 +345,11 @@ func (d listEnvelopeData) MarshalJSON() ([]byte, error) {
 	}
 	if err := writeJSONField(&out, "truncated", d.Truncated); err != nil {
 		return nil, err
+	}
+	if d.Target != nil {
+		if err := writeJSONField(&out, "target", d.Target); err != nil {
+			return nil, err
+		}
 	}
 	out.WriteByte('}')
 	return out.Bytes(), nil

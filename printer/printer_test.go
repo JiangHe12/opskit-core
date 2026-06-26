@@ -212,6 +212,64 @@ func TestJSONListEnvelopeWrapsPagination(t *testing.T) {
 	}
 }
 
+func TestJSONListEnvelopeIncludesTargetWhenSet(t *testing.T) {
+	var out bytes.Buffer
+	p := NewWithWriters(FormatJSON, &out, &bytes.Buffer{})
+	if err := p.JSONListEnvelope(JSONListEnvelope{
+		Kind:      "Table",
+		Items:     []map[string]string{{"name": "demo"}},
+		Total:     1,
+		Page:      1,
+		PageSize:  10,
+		Truncated: false,
+		Target:    map[string]string{"context": "dev", "host": "127.0.0.1:3306"},
+	}); err != nil {
+		t.Fatalf("JSONListEnvelope() error = %v", err)
+	}
+
+	var decoded struct {
+		Data struct {
+			Items  []map[string]string `json:"items"`
+			Total  int                 `json:"total"`
+			Page   int                 `json:"page"`
+			Target map[string]string   `json:"target"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v; output = %s", err, out.String())
+	}
+	if decoded.Data.Total != 1 || decoded.Data.Page != 1 || len(decoded.Data.Items) != 1 {
+		t.Fatalf("decoded list fields = %+v", decoded.Data)
+	}
+	if decoded.Data.Target["context"] != "dev" || decoded.Data.Target["host"] != "127.0.0.1:3306" {
+		t.Fatalf("decoded target = %+v", decoded.Data.Target)
+	}
+}
+
+func TestJSONListEnvelopeOmitsNilTarget(t *testing.T) {
+	var out bytes.Buffer
+	p := NewWithWriters(FormatJSON, &out, &bytes.Buffer{})
+	if err := p.JSONListEnvelope(JSONListEnvelope{
+		Kind:     "Table",
+		Items:    []map[string]string{{"name": "demo"}},
+		Total:    1,
+		Page:     1,
+		PageSize: 10,
+	}); err != nil {
+		t.Fatalf("JSONListEnvelope() error = %v", err)
+	}
+
+	var decoded struct {
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v; output = %s", err, out.String())
+	}
+	if _, ok := decoded.Data["target"]; ok {
+		t.Fatalf("target key present for nil Target: %s", out.String())
+	}
+}
+
 func TestJSONListNakedArray(t *testing.T) {
 	var out bytes.Buffer
 	p := NewWithWriters(FormatJSON, &out, &bytes.Buffer{})
