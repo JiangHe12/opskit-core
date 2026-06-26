@@ -102,6 +102,17 @@ type JSONListEnvelope struct {
 	Truncated bool
 }
 
+type targetData struct {
+	data   any
+	target any
+}
+
+// WithTarget wraps data so JSON marshal injects target under the "target" key.
+// If data is not a JSON object, it falls back to {"target":..., "value":data}.
+func WithTarget(data, target any) any {
+	return targetData{data: data, target: target}
+}
+
 // New creates a Printer using stdout/stderr.
 func New(format Format) *Printer {
 	disableColorIfNeeded(os.Stdout)
@@ -213,6 +224,19 @@ func (p *Printer) KV(pairs [][2]string) {
 	}
 }
 
+// TargetHeader prints a target summary for table/plain output and suppresses JSON.
+func (p *Printer) TargetHeader(label string, fields [][2]string) {
+	if p.Format == FormatJSON {
+		return
+	}
+	parts := make([]string, 0, len(fields))
+	for _, field := range fields {
+		parts = append(parts, field[0]+"="+field[1])
+	}
+	p.KV([][2]string{{label, strings.Join(parts, " | ")}})
+	_, _ = fmt.Fprintln(p.Out)
+}
+
 // Content prints a titled content block.
 func (p *Printer) Content(title, content string) {
 	if p.Format == FormatJSON {
@@ -321,6 +345,29 @@ func (d listEnvelopeData) MarshalJSON() ([]byte, error) {
 	}
 	out.WriteByte('}')
 	return out.Bytes(), nil
+}
+
+func (d targetData) MarshalJSON() ([]byte, error) {
+	dataBytes, err := json.Marshal(d.data)
+	if err != nil {
+		return nil, err
+	}
+	targetBytes, err := json.Marshal(d.target)
+	if err != nil {
+		return nil, err
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(dataBytes, &object); err == nil && object != nil {
+		object["target"] = targetBytes
+		return json.Marshal(object)
+	}
+	return json.Marshal(struct {
+		Target any `json:"target"`
+		Value  any `json:"value"`
+	}{
+		Target: d.target,
+		Value:  d.data,
+	})
 }
 
 func writeJSONField(out *bytes.Buffer, name string, value any) error {

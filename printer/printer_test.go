@@ -72,6 +72,79 @@ func TestJSONDataEnvelopeUsesConfiguredAPIVersion(t *testing.T) {
 	}
 }
 
+func TestWithTargetMergesObjectData(t *testing.T) {
+	payload := WithTarget(map[string]any{"name": "demo", "count": float64(2)}, map[string]string{"context": "dev"})
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var decoded struct {
+		Name   string `json:"name"`
+		Count  int    `json:"count"`
+		Target struct {
+			Context string `json:"context"`
+		} `json:"target"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v; output = %s", err, data)
+	}
+	if decoded.Name != "demo" || decoded.Count != 2 || decoded.Target.Context != "dev" {
+		t.Fatalf("decoded = %+v", decoded)
+	}
+}
+
+func TestWithTargetFallbackForNonObjectData(t *testing.T) {
+	tests := []struct {
+		name string
+		data any
+	}{
+		{name: "array", data: []string{"a", "b"}},
+		{name: "scalar", data: "value"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := WithTarget(tt.data, map[string]string{"context": "dev"})
+			data, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatalf("Marshal() error = %v", err)
+			}
+			var decoded struct {
+				Target map[string]string `json:"target"`
+				Value  any               `json:"value"`
+			}
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("Unmarshal() error = %v; output = %s", err, data)
+			}
+			if decoded.Target["context"] != "dev" || decoded.Value == nil {
+				t.Fatalf("decoded = %+v", decoded)
+			}
+		})
+	}
+}
+
+func TestTargetHeaderTableOutput(t *testing.T) {
+	var out bytes.Buffer
+	p := NewWithWriters(FormatTable, &out, &bytes.Buffer{})
+
+	p.TargetHeader("TARGET", [][2]string{{"context", "dev"}, {"engine", "mysql"}, {"host", "127.0.0.1:3306"}})
+
+	want := "TARGET\tcontext=dev | engine=mysql | host=127.0.0.1:3306\n\n"
+	if got := out.String(); got != want {
+		t.Fatalf("TargetHeader() = %q, want %q", got, want)
+	}
+}
+
+func TestTargetHeaderJSONSuppressesOutput(t *testing.T) {
+	var out bytes.Buffer
+	p := NewWithWriters(FormatJSON, &out, &bytes.Buffer{})
+
+	p.TargetHeader("TARGET", [][2]string{{"context", "dev"}})
+
+	if got := out.String(); got != "" {
+		t.Fatalf("TargetHeader() JSON output = %q, want empty", got)
+	}
+}
+
 func TestNacosStyleJSONDataUsesEnvelopeByDefault(t *testing.T) {
 	Configure(Options{APIVersion: "nacos-cli.io/v1", JSONEnvelopeByDefault: true})
 	t.Cleanup(func() { Configure(Options{APIVersion: "opskit-core.io/v1"}) })

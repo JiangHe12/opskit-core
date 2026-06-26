@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.1.2
+
+### Added
+
+- Added shared printer target helpers for operation-target headers and JSON
+  `data.target` injection, so family CLIs can show target awareness without
+  duplicating output wrapping logic.
+
 ## v1.1.1
 
 ### Added
