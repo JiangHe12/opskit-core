@@ -47,6 +47,7 @@ It's the foundation under [`dbgov-cli`](https://github.com/JiangHe12/dbgov-cli) 
 | 📈 **`telemetry`** | OpenTelemetry tracing and metrics with per-CLI service / attribute / metric prefixes. |
 | ⚠️ **`apperrors`** | Typed error codes and the shared process exit-code contract. |
 | 🔒 **`lockfile`** | Advisory lock file that serializes mutating operations. |
+| 📌 **`trust`** | Transport-neutral trust-on-first-use (TOFU) pin store: pin SSH host keys or TLS certificate SPKI on first use, hard-fail on any later change. |
 
 ---
 
