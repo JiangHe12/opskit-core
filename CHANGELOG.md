@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.1.1
+
+### Added
+
+- Added `credstore.IsPlaintextBackend` and `credstore.RequireSecureBackend` so
+  family CLIs share one fail-closed guard rejecting credential storage under a
+  plaintext (`plain-yaml`) backend, instead of duplicating the check per CLI.
+
 ## v1.1.0
 
 ### Added
