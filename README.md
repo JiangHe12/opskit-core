@@ -74,7 +74,7 @@ import (
 
 // 1. Wire the engine to your CLI's identity (once, at startup)
 safety.Configure(safety.Config{ /* prompt text, operator env var, RBAC hints */ })
-audit.Configure(audit.Config{APIVersion: "dbgov.io/audit/v1", ConfigDirName: ".dbgov"})
+audit.Configure(audit.Config{APIVersion: "dbgov-cli.io/audit/v1", ConfigDirName: ".dbgov"})
 credstore.Configure(credstore.Options{KeychainService: "dbgov", EncryptedFileMagic: []byte("DBGOV001")})
 
 // 2. Classify an operation, then gate it behind the right human approvals

@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.1.4
+
+### Changed
+
+- Updated README example to use the aligned API namespace `dbgov-cli.io/audit/v1`
+  (previously `dbgov.io/audit/v1`) following family namespace convention.
+- Upgraded GitHub Actions dependencies in release workflow (checkout@v7,
+  action-gh-release v3.0.1).
+
 ## v1.1.3
 
 ### Added

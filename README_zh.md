@@ -74,7 +74,7 @@ import (
 
 // 1. 用你 CLI 的身份接上引擎（启动时一次）
 safety.Configure(safety.Config{ /* 提示文案、操作者环境变量、RBAC 提示 */ })
-audit.Configure(audit.Config{APIVersion: "dbgov.io/audit/v1", ConfigDirName: ".dbgov"})
+audit.Configure(audit.Config{APIVersion: "dbgov-cli.io/audit/v1", ConfigDirName: ".dbgov"})
 credstore.Configure(credstore.Options{KeychainService: "dbgov", EncryptedFileMagic: []byte("DBGOV001")})
 
 // 2. 对操作分级，再用正确的人类批准把它拦在门外
