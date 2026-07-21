@@ -1,7 +1,9 @@
 package audit
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -13,6 +15,9 @@ type rawRecordFields struct {
 
 func parseRawRecordFields(plain []byte) (rawRecordFields, bool) {
 	if !json.Valid(plain) {
+		return rawRecordFields{}, false
+	}
+	if err := rejectDuplicateRawTopLevelKeys(plain); err != nil {
 		return rawRecordFields{}, false
 	}
 	var object map[string]json.RawMessage
@@ -30,6 +35,41 @@ func parseRawRecordFields(plain []byte) (rawRecordFields, bool) {
 		_ = json.Unmarshal(raw, &fields.Operator)
 	}
 	return fields, true
+}
+
+func rejectDuplicateRawTopLevelKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok || delim != '{' {
+		return fmt.Errorf("expected JSON object")
+	}
+	seen := []string{}
+	for decoder.More() {
+		token, err = decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := token.(string)
+		if !ok {
+			return fmt.Errorf("expected JSON object key")
+		}
+		if previous, exists := equalFoldJSONField(seen, key); exists {
+			return fmt.Errorf("semantically duplicate JSON keys %q and %q", previous, key)
+		}
+		seen = append(seen, key)
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return err
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
+	return ensureJSONEOF(decoder)
 }
 
 func matchesRawFilter(fields rawRecordFields, filter Filter) bool {

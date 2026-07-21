@@ -10,7 +10,7 @@ import (
 )
 
 func TestVerifyReportsMalformedEntry(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.log")
+	path := filepath.Join(privateTestDir(t), "audit.log")
 	event := Event{Timestamp: time.Now().UTC(), EventType: EventType("resource.create"), Operator: "alice", Status: StatusSuccess}
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -29,7 +29,7 @@ func TestVerifyReportsMalformedEntry(t *testing.T) {
 }
 
 func TestVerifyReportsSchemaMismatchAsSchemaError(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.log")
+	path := filepath.Join(privateTestDir(t), "audit.log")
 	valid := Event{Timestamp: time.Now().UTC(), EventType: EventType("resource.create"), Operator: "alice", Status: StatusSuccess}
 	validData, err := json.Marshal(valid)
 	if err != nil {
@@ -51,7 +51,7 @@ func TestVerifyReportsSchemaMismatchAsSchemaError(t *testing.T) {
 }
 
 func TestVerifyRepairKeepsSchemaErrorEntry(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.log")
+	path := filepath.Join(privateTestDir(t), "audit.log")
 	valid := Event{Timestamp: time.Now().UTC(), EventType: EventType("resource.create"), Operator: "alice", Status: StatusSuccess}
 	validData, err := json.Marshal(valid)
 	if err != nil {
@@ -79,7 +79,7 @@ func TestVerifyRepairKeepsSchemaErrorEntry(t *testing.T) {
 }
 
 func TestVerifyRepairQuarantinesMalformedEntry(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.log")
+	path := filepath.Join(privateTestDir(t), "audit.log")
 	event := Event{Timestamp: time.Now().UTC(), EventType: EventType("resource.create"), Operator: "alice", Status: StatusSuccess}
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -112,7 +112,7 @@ func TestVerifyRepairQuarantinesMalformedEntry(t *testing.T) {
 }
 
 func TestVerifyDecryptsEncryptedEntry(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.log")
+	path := filepath.Join(privateTestDir(t), "audit.log")
 	identity, publicKeyPath := writeTestAgePublicKey(t)
 	if err := AppendWithOptions(path, Event{EventType: EventType("resource.create"), Operator: "alice", Status: StatusSuccess},
 		Options{EncryptPublicKeyPath: publicKeyPath}); err != nil {

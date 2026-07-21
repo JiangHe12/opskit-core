@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/JiangHe12/opskit-core/v2/apperrors"
 	"github.com/fatih/color"
 	"github.com/mattn/go-isatty"
 	"github.com/olekukonko/tablewriter"
@@ -126,30 +127,31 @@ func NewWithWriters(format Format, out, errOut io.Writer) *Printer {
 }
 
 // Success prints a success message.
-func (p *Printer) Success(msg string) {
-	_, _ = ColorSuccess.Fprintln(p.Out, "✓ "+msg)
+func (p *Printer) Success(msg string) error {
+	return writeOutput(p.Out, []byte(ColorSuccess.Sprint("✓ "+msg)+"\n"))
 }
 
 // Error prints an error message to stderr.
-func (p *Printer) Error(msg string) {
-	_, _ = ColorError.Fprintln(p.Err, "✗ "+msg)
+func (p *Printer) Error(msg string) error {
+	return writeOutput(p.Err, []byte(ColorError.Sprint("✗ "+msg)+"\n"))
 }
 
 // Warn prints a warning message to stderr.
-func (p *Printer) Warn(msg string) {
-	_, _ = ColorWarn.Fprintln(p.Err, msg)
+func (p *Printer) Warn(msg string) error {
+	return writeOutput(p.Err, []byte(ColorWarn.Sprint(msg)+"\n"))
 }
 
 // Info prints a plain message.
-func (p *Printer) Info(msg string) {
-	_, _ = fmt.Fprintln(p.Out, msg)
+func (p *Printer) Info(msg string) error {
+	return writeOutput(p.Out, []byte(msg+"\n"))
 }
 
 // Table prints rows as table, JSON, or plain text.
-func (p *Printer) Table(headers []string, rows [][]string) {
+func (p *Printer) Table(headers []string, rows [][]string) error {
 	switch p.Format {
 	case FormatTable:
-		table := tablewriter.NewWriter(p.Out)
+		trackedOut := &writeTrackingWriter{writer: p.Out}
+		table := tablewriter.NewWriter(trackedOut)
 		colored := make([]string, len(headers))
 		for i, h := range headers {
 			colored[i] = ColorTitle.Sprint(h)
@@ -187,25 +189,29 @@ func (p *Printer) Table(headers []string, rows [][]string) {
 			table.Append(dimmed)
 		}
 		table.Render()
+		if err := trackedOut.Err(); err != nil {
+			return wrapOutputWriteError(err)
+		}
 		if options.TableFooter {
-			_, _ = ColorDim.Fprintf(p.Out, "\n  Total: %d item(s)\n", len(rows))
+			text := fmt.Sprintf("\n  Total: %d item(s)\n", len(rows))
+			return writeOutput(p.Out, []byte(ColorDim.Sprint(text)))
 		}
 	case FormatJSON:
-		_ = p.JSONList("Table", tableItems(headers, rows), len(rows), 1, len(rows), false)
+		return p.JSONList("Table", tableItems(headers, rows), len(rows), 1, len(rows), false)
 	case FormatPlain:
-		p.tablePlain(headers, rows)
+		return p.tablePlain(headers, rows)
 	}
+	return nil
 }
 
 // KV prints key/value pairs.
-func (p *Printer) KV(pairs [][2]string) {
+func (p *Printer) KV(pairs [][2]string) error {
 	if p.Format == FormatJSON {
 		m := make(map[string]string, len(pairs))
 		for _, pair := range pairs {
 			m[jsonKey(pair[0])] = pair[1]
 		}
-		_ = p.JSONData("Object", m)
-		return
+		return p.JSONData("Object", m)
 	}
 	if p.Format == FormatTable && options.DecoratedKVTable {
 		maxKey := 0
@@ -216,45 +222,50 @@ func (p *Printer) KV(pairs [][2]string) {
 		}
 		for _, pair := range pairs {
 			key := ColorTitle.Sprintf("%-*s", maxKey, pair[0])
-			_, _ = fmt.Fprintf(p.Out, "  %s  %s\n", key, pair[1])
+			text := fmt.Sprintf("  %s  %s\n", key, pair[1])
+			if err := writeOutput(p.Out, []byte(text)); err != nil {
+				return err
+			}
 		}
-		return
+		return nil
 	}
 	for _, pair := range pairs {
-		_, _ = fmt.Fprintf(p.Out, "%s\t%s\n", pair[0], pair[1])
+		text := fmt.Sprintf("%s\t%s\n", pair[0], pair[1])
+		if err := writeOutput(p.Out, []byte(text)); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // TargetHeader prints a target summary for table/plain output and suppresses JSON.
-func (p *Printer) TargetHeader(label string, fields [][2]string) {
+func (p *Printer) TargetHeader(label string, fields [][2]string) error {
 	if p.Format == FormatJSON {
-		return
+		return nil
 	}
 	parts := make([]string, 0, len(fields))
 	for _, field := range fields {
 		parts = append(parts, field[0]+"="+field[1])
 	}
-	p.KV([][2]string{{label, strings.Join(parts, " | ")}})
-	_, _ = fmt.Fprintln(p.Out)
+	if err := p.KV([][2]string{{label, strings.Join(parts, " | ")}}); err != nil {
+		return err
+	}
+	return writeOutput(p.Out, []byte("\n"))
 }
 
 // Content prints a titled content block.
-func (p *Printer) Content(title, content string) {
+func (p *Printer) Content(title, content string) error {
 	if p.Format == FormatJSON {
-		_ = p.JSONData("Content", map[string]string{"title": title, "content": content})
-		return
+		return p.JSONData("Content", map[string]string{"title": title, "content": content})
 	}
 	if p.Format == FormatPlain {
-		_, _ = fmt.Fprint(p.Out, content)
-		return
+		return writeOutput(p.Out, []byte(content))
 	}
 	if options.DecoratedContent {
-		_, _ = ColorTitle.Fprintf(p.Out, "── %s ──\n", title)
-		_, _ = fmt.Fprintln(p.Out, content)
-		_, _ = ColorDim.Fprintf(p.Out, "── end ──\n")
-		return
+		decorated := ColorTitle.Sprintf("── %s ──\n", title) + content + "\n" + ColorDim.Sprint("── end ──\n")
+		return writeOutput(p.Out, []byte(decorated))
 	}
-	_, _ = fmt.Fprint(p.Out, content)
+	return writeOutput(p.Out, []byte(content))
 }
 
 // JSONData prints data as naked JSON. The kind parameter is kept for future extension.
@@ -396,19 +407,69 @@ func writeJSONField(out *bytes.Buffer, name string, value any) error {
 	return nil
 }
 
-func (p *Printer) tablePlain(headers []string, rows [][]string) {
+func (p *Printer) tablePlain(headers []string, rows [][]string) error {
 	if p.PlainHead {
-		_, _ = fmt.Fprintln(p.Out, strings.Join(headers, "\t"))
+		if err := writeOutput(p.Out, []byte(strings.Join(headers, "\t")+"\n")); err != nil {
+			return err
+		}
 	}
 	for _, row := range rows {
-		_, _ = fmt.Fprintln(p.Out, strings.Join(row, "\t"))
+		if err := writeOutput(p.Out, []byte(strings.Join(row, "\t")+"\n")); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (p *Printer) printJSON(v any) error {
-	enc := json.NewEncoder(p.Out)
-	enc.SetIndent("", "  ")
-	return enc.Encode(v)
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return apperrors.New(apperrors.CodeLocalIOError, "failed to serialize JSON output", err)
+	}
+	data = append(data, '\n')
+	return writeOutput(p.Out, data)
+}
+
+func writeOutput(writer io.Writer, data []byte) error {
+	n, err := writer.Write(data)
+	return outputWriteError(n, len(data), err)
+}
+
+func outputWriteError(written, expected int, err error) error {
+	if err == nil && written == expected {
+		return nil
+	}
+	if err == nil {
+		err = io.ErrShortWrite
+	}
+	return wrapOutputWriteError(err)
+}
+
+func wrapOutputWriteError(err error) error {
+	return apperrors.New(apperrors.CodeLocalIOError, "failed to write command output", err)
+}
+
+type writeTrackingWriter struct {
+	writer io.Writer
+	err    error
+}
+
+func (w *writeTrackingWriter) Write(data []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	written, err := w.writer.Write(data)
+	if err == nil && written != len(data) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		w.err = err
+	}
+	return written, err
+}
+
+func (w *writeTrackingWriter) Err() error {
+	return w.err
 }
 
 func tableItems(headers []string, rows [][]string) []map[string]string {

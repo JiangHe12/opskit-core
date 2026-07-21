@@ -11,8 +11,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/JiangHe12/opskit-core/apperrors"
-	"github.com/JiangHe12/opskit-core/lockfile"
+	"github.com/JiangHe12/opskit-core/v2/apperrors"
+	"github.com/JiangHe12/opskit-core/v2/lockfile"
 )
 
 // Pin is one trust-on-first-use endpoint material record.

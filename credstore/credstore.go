@@ -11,7 +11,11 @@ import (
 // ErrNotFound is returned when a credential is not present in the backend.
 var ErrNotFound = errors.New("credstore: credential not found")
 
-// Backend is implemented by credential storage backends.
+// Backend is implemented by credential storage backends. Context cancellation
+// is backend-specific. In particular, OS keychain Put and Delete honor a
+// cancellation observed before the mutation starts; once the OS call starts,
+// they wait for its definite result because the keychain API cannot cancel a
+// mutation transactionally.
 type Backend interface {
 	Name() string
 	Get(ctx context.Context, contextName string) (string, error)

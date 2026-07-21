@@ -11,7 +11,7 @@ import (
 
 	"github.com/mattn/go-isatty"
 
-	"github.com/JiangHe12/opskit-core/apperrors"
+	"github.com/JiangHe12/opskit-core/v2/apperrors"
 )
 
 // Risk is the authorization risk level.
@@ -68,7 +68,7 @@ type Options struct {
 // Config controls package-level text and environment defaults.
 type Config struct {
 	Prompt                   string
-	OperatorEnvVar           string
+	OperatorEnvVar           string // Deprecated: environment variables are not trusted authorization identities.
 	RoleAssignmentHintFormat string
 }
 
@@ -111,6 +111,9 @@ func EffectiveRisk(base Risk, meta ContextMeta) Risk {
 // Authorize verifies the required ticket, yes confirmation, and R3 allow flag.
 // If the context has Roles configured, the operator's role is also checked.
 func Authorize(risk Risk, opts Options) error {
+	if risk < R0 || risk > R3 {
+		return authorizationError(fmt.Sprintf("invalid risk level %d", risk))
+	}
 	if err := checkRole(risk, opts); err != nil {
 		return err
 	}
@@ -221,10 +224,7 @@ func checkRole(risk Risk, opts Options) error {
 		return nil
 	}
 	if opts.Operator == "" {
-		opts.Operator = os.Getenv(config.OperatorEnvVar)
-	}
-	if opts.Operator == "" {
-		return authorizationError(fmt.Sprintf("operator identity required when roles are configured (set --operator or %s)", config.OperatorEnvVar))
+		return authorizationError("trusted operator identity required when roles are configured")
 	}
 	role, ok := opts.Roles[opts.Operator]
 	if !ok {
@@ -232,7 +232,13 @@ func checkRole(risk Risk, opts Options) error {
 			"operator %q has no role in this context; %s",
 			opts.Operator, roleAssignmentHint(opts.Operator, requiredRole(risk))))
 	}
-	if risk > maxRiskForRole(role) {
+	maxRisk, ok := maxRiskForRole(role)
+	if !ok {
+		return authorizationError(fmt.Sprintf(
+			"operator %q has unrecognized role %q",
+			opts.Operator, role))
+	}
+	if risk > maxRisk {
 		return authorizationError(fmt.Sprintf(
 			"operator %q (role: %s) is not authorized for this operation (requires role: %s)",
 			opts.Operator, role, requiredRole(risk)))
@@ -244,14 +250,16 @@ func roleAssignmentHint(operator, role string) string {
 	return fmt.Sprintf(config.RoleAssignmentHintFormat, operator, role)
 }
 
-func maxRiskForRole(role string) Risk {
+func maxRiskForRole(role string) (Risk, bool) {
 	switch role {
 	case RoleReader:
-		return R0
+		return R0, true
 	case RoleWriter:
-		return R2
-	default: // admin or unrecognized
-		return R3
+		return R2, true
+	case RoleAdmin:
+		return R3, true
+	default:
+		return R0, false
 	}
 }
 

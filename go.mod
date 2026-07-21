@@ -1,4 +1,4 @@
-module github.com/JiangHe12/opskit-core
+module github.com/JiangHe12/opskit-core/v2
 
 go 1.25.0
 

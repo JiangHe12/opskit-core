@@ -1,6 +1,7 @@
 package ctx
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -9,9 +10,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/JiangHe12/opskit-core/apperrors"
-	"github.com/JiangHe12/opskit-core/credstore"
-	"github.com/JiangHe12/opskit-core/lockfile"
+	"github.com/JiangHe12/opskit-core/v2/apperrors"
+	"github.com/JiangHe12/opskit-core/v2/credstore"
+	"github.com/JiangHe12/opskit-core/v2/lockfile"
 )
 
 // Base contains common context fields shared by governed CLI tools.
@@ -255,6 +256,9 @@ func (s Store[T]) loadUnlocked() (*Config[T], error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := enforceContextFileMode(path); err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return emptyConfig[T](), nil
@@ -267,7 +271,9 @@ func (s Store[T]) loadUnlocked() (*Config[T], error) {
 
 func (s Store[T]) decode(data []byte, allowEmptyVersion bool) (*Config[T], error) {
 	var cfg Config[T]
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&cfg); err != nil {
 		return nil, apperrors.New(apperrors.CodeLocalIOError, "failed to parse context file", err)
 	}
 	if allowEmptyVersion && cfg.APIVersion == "" {

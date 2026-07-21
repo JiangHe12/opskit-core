@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/JiangHe12/opskit-core/apperrors"
+	"github.com/JiangHe12/opskit-core/v2/apperrors"
 )
 
 const vaultBackendName = "vault"
@@ -42,7 +42,7 @@ func NewVault(cfg VaultConfig) Backend {
 func (v *vaultBackend) Name() string { return vaultBackendName }
 
 func (v *vaultBackend) Available() error {
-	if err := v.validateConfig(false); err != nil {
+	if err := v.validateConfig(true); err != nil {
 		return err
 	}
 	if os.Getenv("VAULT_SECRET_ID") != "" {
@@ -162,8 +162,22 @@ func (v *vaultBackend) Delete(ctx context.Context, _ string) error {
 }
 
 func (v *vaultBackend) validateConfig(requireAddr bool) error {
-	if requireAddr && strings.TrimSpace(v.cfg.Addr) == "" {
-		return apperrors.New(apperrors.CodeUsageError, "vault credential backend requires vaultAddr", nil)
+	addr := strings.TrimSpace(v.cfg.Addr)
+	if requireAddr {
+		if addr == "" {
+			return apperrors.New(apperrors.CodeUsageError, "vault credential backend requires vaultAddr", nil)
+		}
+		parsed, err := url.Parse(addr)
+		if err != nil || !parsed.IsAbs() || !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" {
+			return apperrors.New(apperrors.CodeUsageError, "vaultAddr must be an absolute HTTPS URL", err)
+		}
+		if parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+			return apperrors.New(
+				apperrors.CodeUsageError,
+				"vaultAddr must not contain user information, a query, or a fragment",
+				nil,
+			)
+		}
 	}
 	if strings.TrimSpace(v.cfg.Path) == "" {
 		return apperrors.New(apperrors.CodeUsageError, "vault credential backend requires vaultPath", nil)
@@ -246,7 +260,7 @@ func (v *vaultBackend) secretURL() string {
 }
 
 func (v *vaultBackend) apiURL(path string) string {
-	base := strings.TrimRight(v.cfg.Addr, "/")
+	base := strings.TrimRight(strings.TrimSpace(v.cfg.Addr), "/")
 	escaped := strings.Split(path, "/")
 	for i, part := range escaped {
 		escaped[i] = url.PathEscape(part)

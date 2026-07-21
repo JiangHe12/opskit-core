@@ -59,7 +59,19 @@ func TestAcquireStaleLockIsReclaimed(t *testing.T) {
 
 	// Write a lock file with PID 0 — guaranteed to not correspond to a live process.
 	stale := fmt.Sprintf("pid=%d\ntoken=deadbeef\nts=%s\n", 0, time.Now().UTC().Format(time.RFC3339))
-	if err := os.WriteFile(lockPath, []byte(stale), 0o600); err != nil {
+	file, err := createLockFileExclusive(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString(stale); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	staleTime := time.Now().Add(-lockInitializationGrace - time.Second)
+	if err := os.Chtimes(lockPath, staleTime, staleTime); err != nil {
 		t.Fatal(err)
 	}
 
@@ -80,6 +92,38 @@ func TestAcquireStaleLockIsReclaimed(t *testing.T) {
 	}
 	if pid != lock.pid || token != lock.token {
 		t.Fatalf("lock owner mismatch: got pid=%d token=%s, want pid=%d token=%s", pid, token, lock.pid, lock.token)
+	}
+}
+
+func TestInspectAndAcquireRejectOversizedLock(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "config")
+	lockPath := base + ".lock"
+	file, err := createLockFileExclusive(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write(bytes.Repeat([]byte{'x'}, maxLockBytes+1)); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Inspect(base); err == nil {
+		t.Fatal("Inspect() error = nil, want oversized-lock rejection")
+	}
+	if err := New(base).Acquire(); err == nil {
+		t.Fatal("Acquire() error = nil, want oversized-lock rejection")
+	}
+}
+
+func TestInspectRejectsNonRegularLock(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "config")
+	if err := os.Mkdir(base+".lock", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Inspect(base); err == nil {
+		t.Fatal("Inspect() error = nil, want non-regular-lock rejection")
 	}
 }
 

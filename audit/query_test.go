@@ -11,7 +11,7 @@ import (
 
 func writeAuditFile(t *testing.T, events []Event) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := privateTestDir(t)
 	path := filepath.Join(dir, "audit.log")
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -86,7 +86,7 @@ func TestQueryNoFilterReturnsAll(t *testing.T) {
 }
 
 func TestQueryIncludesRotatedLogs(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTestDir(t)
 	path := filepath.Join(dir, "audit.log")
 	older := Event{
 		Timestamp: time.Now().UTC().Add(-time.Hour),
@@ -298,7 +298,7 @@ func TestQueryNoMatchesReturnsEmptyEventsArray(t *testing.T) {
 
 func TestQueryMalformedLineSkipped(t *testing.T) {
 	now := time.Now().UTC()
-	dir := t.TempDir()
+	dir := privateTestDir(t)
 	path := filepath.Join(dir, "audit.log")
 
 	good, _ := json.Marshal(Event{Timestamp: now, EventType: EventType("resource.create"), Operator: "alice"})
@@ -321,7 +321,7 @@ func TestQueryMalformedLineSkipped(t *testing.T) {
 
 func TestQueryReportsZeroMalformedForValidLog(t *testing.T) {
 	now := time.Now().UTC()
-	dir := t.TempDir()
+	dir := privateTestDir(t)
 	path := filepath.Join(dir, "audit.log")
 
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)

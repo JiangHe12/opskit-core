@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/JiangHe12/opskit-core/apperrors"
+	"github.com/JiangHe12/opskit-core/v2/apperrors"
 	"github.com/zalando/go-keyring"
 )
 
@@ -133,7 +133,7 @@ func TestVaultPreciseErrorMapping(t *testing.T) {
 	}
 
 	t.Setenv("VAULT_SECRET_ID", "secret-id")
-	_, err = NewVault(VaultConfig{Addr: "http://127.0.0.1", Path: "secret"}).Get(context.Background(), "ctx")
+	_, err = NewVault(VaultConfig{Addr: "https://127.0.0.1", Path: "secret"}).Get(context.Background(), "ctx")
 	if appErr := apperrors.AsAppError(err); appErr.Code != apperrors.CodeUsageError {
 		t.Fatalf("missing role id code = %s, want %s", appErr.Code, apperrors.CodeUsageError)
 	}

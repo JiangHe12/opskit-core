@@ -34,7 +34,7 @@ func TestAppendRecordVerifyAndQueryRawForeignRecord(t *testing.T) {
 		})
 	})
 
-	path := filepath.Join(t.TempDir(), "audit.log")
+	path := filepath.Join(privateTestDir(t), "audit.log")
 	record := foreignAuditRecord{
 		APIVersion: "foreign.io/audit/v1",
 		Kind:       "AuditEvent",
@@ -58,14 +58,21 @@ func TestAppendRecordVerifyAndQueryRawForeignRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	if got := strings.TrimSpace(string(data)); got != string(wantLine) {
-		t.Fatalf("audit line = %s, want %s", got, wantLine)
+	envelope, payload, isEnvelope, err := parseEnvelope([]byte(strings.TrimSpace(string(data))))
+	if err != nil || !isEnvelope {
+		t.Fatalf("parseEnvelope() = (%+v, %t, %v), want v2 envelope", envelope, isEnvelope, err)
 	}
-	if !strings.Contains(string(data), `"apiVersion":"foreign.io/audit/v1","kind":"AuditEvent","eventId":"evt-1","timestamp"`) {
-		t.Fatalf("audit line lost foreign field order: %s", data)
+	if envelope.APIVersion != envelopeAPIVersion || envelope.Kind != envelopeKind {
+		t.Fatalf("envelope = %+v, want fixed v2 identity", envelope)
 	}
-	if !strings.Contains(string(data), `"type":"config.write"`) || strings.Contains(string(data), `"eventType"`) {
-		t.Fatalf("audit line did not use foreign type key: %s", data)
+	if string(payload.plain) != string(wantLine) {
+		t.Fatalf("envelope payload = %s, want %s", payload.plain, wantLine)
+	}
+	if !strings.Contains(string(payload.plain), `"apiVersion":"foreign.io/audit/v1","kind":"AuditEvent","eventId":"evt-1","timestamp"`) {
+		t.Fatalf("audit payload lost foreign field order: %s", payload.plain)
+	}
+	if !strings.Contains(string(payload.plain), `"type":"config.write"`) || strings.Contains(string(payload.plain), `"eventType"`) {
+		t.Fatalf("audit payload did not use foreign type key: %s", payload.plain)
 	}
 
 	verify, err := Verify(path, VerifyOptions{})
@@ -99,7 +106,7 @@ func TestAppendRecordVerifyAndQueryRawForeignRecord(t *testing.T) {
 }
 
 func TestAppendRecordDoesNotDefaultTimestamp(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.log")
+	path := filepath.Join(privateTestDir(t), "audit.log")
 	record := struct {
 		Type     string `json:"type"`
 		Operator string `json:"operator"`

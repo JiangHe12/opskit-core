@@ -1,5 +1,70 @@
 # Changelog
 
+## v2.0.0
+
+### Breaking
+
+- Changed the Go module and all package imports to
+  `github.com/JiangHe12/opskit-core/v2` in accordance with Go semantic import
+  versioning. Version 1 consumers must opt in by updating both `require` and
+  import paths.
+- Output-writing `printer` methods now return errors so broken pipes, short
+  writes, and encoder failures cannot be reported as successful commands.
+- Vault credential storage now requires HTTPS endpoints and rejects plaintext
+  HTTP configuration.
+
+### Migration
+
+- Update all imports to the `/v2` module path and propagate every `printer`
+  error to the command boundary.
+- Use `audit.AppendRecordWithResult` where mutation recovery must distinguish a
+  definitely absent record from committed, post-commit-error, or indeterminate
+  states. Never duplicate-spool a record that may already be committed.
+- Use `VerifyResult.HasProblems()` for strict audit verification and replace
+  direct rotation deletion with `audit.PruneRotatedFiles` after consumer-side
+  R3 authorization.
+
+### Security
+
+- Added authenticated v2 audit envelopes with HMAC-SHA256 chaining,
+  monotonically increasing sequences, and an authenticated base/head
+  checkpoint that detects edits, gaps, reordering, downgrade insertion, and
+  log-only tail rollback.
+- Added owner-only artifact and directory validation, safer lock reclamation,
+  durable append rollback semantics, bounded parsing, and fail-closed handling
+  of integrity-key/checkpoint aliases, missing state, and duplicate top-level
+  keys in legacy or foreign JSON records.
+- Protected POSIX lock initialization with an inode lock from exclusive create
+  through publication, and made Windows stale-lock PID probes treat access or
+  status-query failures as alive/unknown rather than reclaimable.
+- Hardened age recipient loading against file and parent-directory replacement:
+  the opened file must be owned by the current user and not writable by an
+  untrusted principal. Public read access remains valid for this public key.
+- Hardened encrypted-file credential locking and Vault transport validation;
+  redaction remains required before both caller output and audit persistence.
+
+### Added
+
+- Added `audit.AppendRecordWithResult` and explicit commit states for mutation
+  intent/outcome recovery.
+- Added checkpoint-aware `audit.PruneRotatedFiles`. It accepts only the current
+  continuous oldest rotation prefix, can bind the full preview through
+  `ExpectedRotatedFiles`, advances the checkpoint before deletion, syncs each
+  removal, rejects unrecognized rotation-namespace entries, and safely resumes
+  partially completed pruning.
+- Added `VerifyOptions.ExpectedRotatedFiles` for lock-atomic preview binding and
+  `VerifyResult.HasProblems()` for one complete verification predicate.
+- Added authenticated audit verification/repair regression coverage, lock and
+  permission race coverage, and cross-platform security tests.
+
+### Changed
+
+- Audit append, query, verify, rotation, and legacy repair now share one
+  lock-consistent storage boundary. Legacy rows remain readable only before the
+  first authenticated envelope; authenticated-history repair fails closed.
+- Context, credential, safety, lockfile, and printer APIs now preserve typed
+  errors and durable state more precisely for governed CLI consumers.
+
 ## v1.1.4
 
 ### Changed

@@ -130,6 +130,47 @@ func TestAuthorizeRBACAdminCanDoR3(t *testing.T) {
 	}
 }
 
+func TestAuthorizeRBACRejectsUnknownRole(t *testing.T) {
+	roles := map[string]string{"alice": "admn"}
+	for _, risk := range []Risk{R0, R1, R2, R3} {
+		err := Authorize(risk, Options{
+			Operator:           "alice",
+			Roles:              roles,
+			Yes:                true,
+			NonInteractive:     true,
+			Ticket:             "OPS-1",
+			RequiredAllowFlags: []AllowFlag{allowProductionDelete},
+			GrantedAllowFlags:  map[AllowFlag]bool{allowProductionDelete: true},
+		})
+		if err == nil {
+			t.Errorf("Authorize(%v) with unknown role error = nil, want error", risk)
+			continue
+		}
+		if !strings.Contains(err.Error(), "unrecognized role") {
+			t.Errorf("Authorize(%v) error = %q, want unrecognized role", risk, err)
+		}
+	}
+}
+
+func TestAuthorizeRejectsInvalidRisk(t *testing.T) {
+	for _, risk := range []Risk{-1, R3 + 1} {
+		err := Authorize(risk, Options{
+			Yes:                true,
+			NonInteractive:     true,
+			Ticket:             "OPS-1",
+			RequiredAllowFlags: []AllowFlag{allowProductionDelete},
+			GrantedAllowFlags:  map[AllowFlag]bool{allowProductionDelete: true},
+		})
+		if err == nil {
+			t.Errorf("Authorize(%v) error = nil, want invalid risk error", risk)
+			continue
+		}
+		if !strings.Contains(err.Error(), "invalid risk level") {
+			t.Errorf("Authorize(%v) error = %q, want invalid risk level", risk, err)
+		}
+	}
+}
+
 func TestRBACRejectsEmptyOperatorWhenRolesConfigured(t *testing.T) {
 	roles := map[string]string{"alice": RoleAdmin}
 	err := Authorize(R0, Options{Operator: "", Roles: roles})
@@ -138,6 +179,22 @@ func TestRBACRejectsEmptyOperatorWhenRolesConfigured(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "operator identity required") {
 		t.Fatalf("Authorize() error = %v", err)
+	}
+}
+
+func TestRBACDoesNotTrustOperatorEnvironmentFallback(t *testing.T) {
+	Configure(Config{OperatorEnvVar: "OPSKIT_OPERATOR"})
+	t.Setenv("OPSKIT_OPERATOR", "alice")
+
+	err := Authorize(R0, Options{
+		Operator: "",
+		Roles:    map[string]string{"alice": RoleAdmin},
+	})
+	if err == nil {
+		t.Fatal("environment operator bypassed the required trusted identity")
+	}
+	if !strings.Contains(err.Error(), "trusted operator identity required") {
+		t.Fatalf("Authorize() error = %v, want trusted identity requirement", err)
 	}
 }
 

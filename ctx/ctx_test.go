@@ -121,6 +121,82 @@ func TestStoreRejectsUnsupportedAPIVersion(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsUnknownYAMLFields(t *testing.T) {
+	configureTestStore(t)
+
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "top level",
+			content: `apiVersion: test.io/context/v1
+current-context: prod
+unexpectedRoot: true
+contexts:
+  prod:
+    server: https://example.test
+    backend: nacos
+`,
+		},
+		{
+			name: "context",
+			content: `apiVersion: test.io/context/v1
+current-context: prod
+contexts:
+  prod:
+    server: https://example.test
+    protectd: true
+    backend: nacos
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+			SetConfigPath(path)
+
+			if _, err := testStore.Load(); err == nil {
+				t.Fatal("Load() error = nil, want unknown field error")
+			}
+		})
+	}
+}
+
+func TestStoreUpdateRejectsUnknownYAMLFieldsBeforeCallback(t *testing.T) {
+	configureTestStore(t)
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(`apiVersion: test.io/context/v1
+current-context: prod
+contexts:
+  prod:
+    server: https://example.test
+    protectd: true
+    backend: nacos
+`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	SetConfigPath(path)
+
+	called := false
+	err := testStore.Update(func(_ *Config[testContext]) error {
+		called = true
+		return nil
+	})
+	if err == nil {
+		t.Fatal("Update() error = nil, want unknown field error")
+	}
+	if called {
+		t.Fatal("Update() called callback for a context file with unknown fields")
+	}
+}
+
 func TestStoreRoundTripKeepsFlatContextShape(t *testing.T) {
 	configureTestStore(t)
 

@@ -1,6 +1,6 @@
 package credstore
 
-import "github.com/JiangHe12/opskit-core/apperrors"
+import "github.com/JiangHe12/opskit-core/v2/apperrors"
 
 // IsPlaintextBackend reports whether the named backend persists credentials in
 // plaintext. An empty name resolves to the default plain-yaml backend.

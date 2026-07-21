@@ -3,8 +3,13 @@ package printer
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"strings"
+	"syscall"
 	"testing"
+
+	"github.com/JiangHe12/opskit-core/v2/apperrors"
 )
 
 func TestPlainTableWithHeader(t *testing.T) {
@@ -12,7 +17,7 @@ func TestPlainTableWithHeader(t *testing.T) {
 	p := NewWithWriters(FormatPlain, &out, &bytes.Buffer{})
 	p.PlainHead = true
 
-	p.Table([]string{"NAME", "ENV"}, [][]string{{"dev", "dev"}})
+	requirePrintSuccess(t, p.Table([]string{"NAME", "ENV"}, [][]string{{"dev", "dev"}}))
 
 	if got, want := out.String(), "NAME\tENV\ndev\tdev\n"; got != want {
 		t.Fatalf("plain table = %q, want %q", got, want)
@@ -22,7 +27,7 @@ func TestPlainTableWithHeader(t *testing.T) {
 func TestPlainTableWithoutHeader(t *testing.T) {
 	var out bytes.Buffer
 	p := NewWithWriters(FormatPlain, &out, &bytes.Buffer{})
-	p.Table([]string{"NAME", "ENV"}, [][]string{{"dev", "staging"}})
+	requirePrintSuccess(t, p.Table([]string{"NAME", "ENV"}, [][]string{{"dev", "staging"}}))
 	if !strings.Contains(out.String(), "dev") || strings.Contains(out.String(), "NAME") {
 		t.Fatalf("plain table without header = %q", out.String())
 	}
@@ -126,7 +131,7 @@ func TestTargetHeaderTableOutput(t *testing.T) {
 	var out bytes.Buffer
 	p := NewWithWriters(FormatTable, &out, &bytes.Buffer{})
 
-	p.TargetHeader("TARGET", [][2]string{{"context", "dev"}, {"engine", "mysql"}, {"host", "127.0.0.1:3306"}})
+	requirePrintSuccess(t, p.TargetHeader("TARGET", [][2]string{{"context", "dev"}, {"engine", "mysql"}, {"host", "127.0.0.1:3306"}}))
 
 	want := "TARGET\tcontext=dev | engine=mysql | host=127.0.0.1:3306\n\n"
 	if got := out.String(); got != want {
@@ -138,7 +143,7 @@ func TestTargetHeaderJSONSuppressesOutput(t *testing.T) {
 	var out bytes.Buffer
 	p := NewWithWriters(FormatJSON, &out, &bytes.Buffer{})
 
-	p.TargetHeader("TARGET", [][2]string{{"context", "dev"}})
+	requirePrintSuccess(t, p.TargetHeader("TARGET", [][2]string{{"context", "dev"}}))
 
 	if got := out.String(); got != "" {
 		t.Fatalf("TargetHeader() JSON output = %q, want empty", got)
@@ -300,7 +305,7 @@ func TestNacosStyleTableJSONUsesEnvelopeAndSnakeKeys(t *testing.T) {
 
 	var out bytes.Buffer
 	p := NewWithWriters(FormatJSON, &out, &bytes.Buffer{})
-	p.Table([]string{"Resource ID", "Status Code"}, [][]string{{"app.yaml", "200"}})
+	requirePrintSuccess(t, p.Table([]string{"Resource ID", "Status Code"}, [][]string{{"app.yaml", "200"}}))
 
 	var decoded struct {
 		APIVersion string `json:"apiVersion"`
@@ -326,7 +331,7 @@ func TestTableOutputContainsRows(t *testing.T) {
 	var out bytes.Buffer
 	p := NewWithWriters(FormatTable, &out, &bytes.Buffer{})
 
-	p.Table([]string{"NAME"}, [][]string{{"dev"}})
+	requirePrintSuccess(t, p.Table([]string{"NAME"}, [][]string{{"dev"}}))
 
 	if !strings.Contains(out.String(), "dev") {
 		t.Fatalf("table output %q does not contain row", out.String())
@@ -336,7 +341,7 @@ func TestTableOutputContainsRows(t *testing.T) {
 func TestTableMultiRowAlternates(t *testing.T) {
 	var out bytes.Buffer
 	p := NewWithWriters(FormatTable, &out, &bytes.Buffer{})
-	p.Table([]string{"NAME"}, [][]string{{"row0"}, {"row1"}, {"row2"}})
+	requirePrintSuccess(t, p.Table([]string{"NAME"}, [][]string{{"row0"}, {"row1"}, {"row2"}}))
 	for _, want := range []string{"row0", "row1", "row2"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("table output missing %q: %q", want, out.String())
@@ -347,7 +352,7 @@ func TestTableMultiRowAlternates(t *testing.T) {
 func TestTableJSONFormat(t *testing.T) {
 	var out bytes.Buffer
 	p := NewWithWriters(FormatJSON, &out, &bytes.Buffer{})
-	p.Table([]string{"Name", "Env"}, [][]string{{"dev", "dev"}})
+	requirePrintSuccess(t, p.Table([]string{"Name", "Env"}, [][]string{{"dev", "dev"}}))
 	var decoded []map[string]string
 	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
 		t.Fatalf("Unmarshal() error = %v; output=%q", err, out.String())
@@ -360,7 +365,7 @@ func TestTableJSONFormat(t *testing.T) {
 func TestKVJSONFormat(t *testing.T) {
 	var out bytes.Buffer
 	p := NewWithWriters(FormatJSON, &out, &bytes.Buffer{})
-	p.KV([][2]string{{"Server", "http://localhost"}, {"Group", "DEFAULT_GROUP"}})
+	requirePrintSuccess(t, p.KV([][2]string{{"Server", "http://localhost"}, {"Group", "DEFAULT_GROUP"}}))
 	var decoded map[string]string
 	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
 		t.Fatalf("Unmarshal() error = %v; output=%q", err, out.String())
@@ -376,7 +381,7 @@ func TestKVJSONFormat(t *testing.T) {
 func TestKVPlainFormat(t *testing.T) {
 	var out bytes.Buffer
 	p := NewWithWriters(FormatPlain, &out, &bytes.Buffer{})
-	p.KV([][2]string{{"Key", "value123"}})
+	requirePrintSuccess(t, p.KV([][2]string{{"Key", "value123"}}))
 	if !strings.Contains(out.String(), "Key") || !strings.Contains(out.String(), "value123") {
 		t.Fatalf("KV plain = %q", out.String())
 	}
@@ -389,10 +394,10 @@ func TestNacosStyleKVTableAndContentAndMessages(t *testing.T) {
 	var out bytes.Buffer
 	var errOut bytes.Buffer
 	p := NewWithWriters(FormatTable, &out, &errOut)
-	p.KV([][2]string{{"Key", "value123"}})
-	p.Content("app.yml", "hello")
-	p.Warn("warning")
-	p.Error("failed")
+	requirePrintSuccess(t, p.KV([][2]string{{"Key", "value123"}}))
+	requirePrintSuccess(t, p.Content("app.yml", "hello"))
+	requirePrintSuccess(t, p.Warn("warning"))
+	requirePrintSuccess(t, p.Error("failed"))
 
 	got := out.String()
 	if !strings.Contains(got, "Key") || !strings.Contains(got, "value123") {
@@ -412,7 +417,7 @@ func TestNacosStyleTableFooter(t *testing.T) {
 
 	var out bytes.Buffer
 	p := NewWithWriters(FormatTable, &out, &bytes.Buffer{})
-	p.Table([]string{"Name"}, [][]string{{"app"}, {"api"}})
+	requirePrintSuccess(t, p.Table([]string{"Name"}, [][]string{{"app"}, {"api"}}))
 	if !strings.Contains(out.String(), "Total: 2 item(s)") {
 		t.Fatalf("table footer missing: %q", out.String())
 	}
@@ -421,7 +426,7 @@ func TestNacosStyleTableFooter(t *testing.T) {
 func TestKVMultiWordHeaderCamelCase(t *testing.T) {
 	var out bytes.Buffer
 	p := NewWithWriters(FormatJSON, &out, &bytes.Buffer{})
-	p.KV([][2]string{{"Limit App", "appA"}})
+	requirePrintSuccess(t, p.KV([][2]string{{"Limit App", "appA"}}))
 	var decoded map[string]string
 	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
 		t.Fatalf("Unmarshal() error = %v", err)
@@ -434,7 +439,7 @@ func TestKVMultiWordHeaderCamelCase(t *testing.T) {
 func TestSuccessWritesToOut(t *testing.T) {
 	var out bytes.Buffer
 	p := NewWithWriters(FormatPlain, &out, &bytes.Buffer{})
-	p.Success("everything ok")
+	requirePrintSuccess(t, p.Success("everything ok"))
 	if !strings.Contains(out.String(), "everything ok") {
 		t.Fatalf("Success() output = %q", out.String())
 	}
@@ -443,7 +448,7 @@ func TestSuccessWritesToOut(t *testing.T) {
 func TestInfoWritesToOut(t *testing.T) {
 	var out bytes.Buffer
 	p := NewWithWriters(FormatPlain, &out, &bytes.Buffer{})
-	p.Info("hello world")
+	requirePrintSuccess(t, p.Info("hello world"))
 	if !strings.Contains(out.String(), "hello world") {
 		t.Fatalf("Info() output = %q", out.String())
 	}
@@ -452,6 +457,128 @@ func TestInfoWritesToOut(t *testing.T) {
 func TestTableEmptyRows(t *testing.T) {
 	var out bytes.Buffer
 	p := NewWithWriters(FormatPlain, &out, &bytes.Buffer{})
-	p.Table([]string{"X"}, [][]string{})
+	requirePrintSuccess(t, p.Table([]string{"X"}, [][]string{}))
 	// Should not panic; with no rows the output is just the (omitted) header.
+}
+
+func requirePrintSuccess(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("print error = %v", err)
+	}
+}
+
+func TestJSONSerializationFailureIsStructuredAndWritesNothing(t *testing.T) {
+	var out bytes.Buffer
+	p := NewWithWriters(FormatJSON, &out, &bytes.Buffer{})
+
+	err := p.JSONData("Unsupported", make(chan int))
+	requireLocalIOError(t, err, "failed to serialize JSON output")
+	if out.Len() != 0 {
+		t.Fatalf("output = %q, want no partial JSON", out.String())
+	}
+}
+
+func TestOutputFailuresAreStructured(t *testing.T) {
+	writeErr := syscall.EPIPE
+	tests := []struct {
+		name string
+		run  func(*Printer) error
+	}{
+		{name: "success", run: func(p *Printer) error { return p.Success("ok") }},
+		{name: "stderr", run: func(p *Printer) error { return p.Error("failed") }},
+		{name: "plain table", run: func(p *Printer) error {
+			p.Format = FormatPlain
+			return p.Table([]string{"NAME"}, [][]string{{"dev"}})
+		}},
+		{name: "rendered table", run: func(p *Printer) error {
+			p.Format = FormatTable
+			return p.Table([]string{"NAME"}, [][]string{{"dev"}})
+		}},
+		{name: "json table", run: func(p *Printer) error {
+			p.Format = FormatJSON
+			return p.Table([]string{"NAME"}, [][]string{{"dev"}})
+		}},
+		{name: "kv", run: func(p *Printer) error { return p.KV([][2]string{{"KEY", "value"}}) }},
+		{name: "json kv", run: func(p *Printer) error {
+			p.Format = FormatJSON
+			return p.KV([][2]string{{"KEY", "value"}})
+		}},
+		{name: "target header", run: func(p *Printer) error {
+			return p.TargetHeader("TARGET", [][2]string{{"context", "dev"}})
+		}},
+		{name: "content", run: func(p *Printer) error { return p.Content("title", "content") }},
+		{name: "json content", run: func(p *Printer) error {
+			p.Format = FormatJSON
+			return p.Content("title", "content")
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			failed := errorWriter{err: writeErr}
+			p := NewWithWriters(FormatPlain, failed, failed)
+			err := tt.run(p)
+			requireLocalIOError(t, err, "failed to write command output")
+			if !errors.Is(err, writeErr) {
+				t.Fatalf("error = %v, want wrapped write failure", err)
+			}
+		})
+	}
+}
+
+func TestShortWriteIsStructured(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Printer) error
+	}{
+		{name: "json", run: func(p *Printer) error {
+			return p.JSONData("Thing", map[string]string{"name": "demo"})
+		}},
+		{name: "rendered table", run: func(p *Printer) error {
+			p.Format = FormatTable
+			return p.Table([]string{"NAME"}, [][]string{{"dev"}})
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewWithWriters(FormatJSON, shortWriter{}, &bytes.Buffer{})
+			err := tt.run(p)
+			requireLocalIOError(t, err, "failed to write command output")
+			if !errors.Is(err, io.ErrShortWrite) {
+				t.Fatalf("error = %v, want io.ErrShortWrite", err)
+			}
+		})
+	}
+}
+
+func requireLocalIOError(t *testing.T, err error, message string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("error = nil, want structured output error")
+	}
+	var appErr *apperrors.AppError
+	if !errors.As(err, &appErr) {
+		t.Fatalf("error type = %T, want *apperrors.AppError", err)
+	}
+	if appErr.Code != apperrors.CodeLocalIOError || appErr.Message != message {
+		t.Fatalf("AppError = %+v, want code %s and message %q", appErr, apperrors.CodeLocalIOError, message)
+	}
+}
+
+type errorWriter struct {
+	err error
+}
+
+func (w errorWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+type shortWriter struct{}
+
+func (shortWriter) Write(data []byte) (int, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+	return len(data) - 1, nil
 }

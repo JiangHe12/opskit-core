@@ -47,7 +47,7 @@ func benchmarkQuerySize(b *testing.B, n int) {
 
 func writeBenchmarkAuditLog(tb testing.TB, n int) string {
 	tb.Helper()
-	path := filepath.Join(tb.TempDir(), "audit.log")
+	path := filepath.Join(privateTestDir(tb), "audit.log")
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		tb.Fatalf("OpenFile: %v", err)

@@ -56,32 +56,27 @@ func (k *keychainBackend) Get(ctx context.Context, contextName string) (string, 
 }
 
 func (k *keychainBackend) Put(ctx context.Context, contextName, password string) error {
-	ch := make(chan error, 1)
-	go func() {
-		ch <- keychainSet(options.KeychainService, keychainAccount(contextName), password)
-	}()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-ch:
+	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// OS keychain APIs do not provide transactional cancellation. Once the
+	// mutation starts, wait for its definite result so a canceled context
+	// cannot conceal a credential that was committed in the background.
+	return keychainSet(options.KeychainService, keychainAccount(contextName), password)
 }
 
 func (k *keychainBackend) Delete(ctx context.Context, contextName string) error {
-	ch := make(chan error, 1)
-	go func() {
-		ch <- keychainDelete(options.KeychainService, keychainAccount(contextName))
-	}()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-ch:
-		if errors.Is(err, keyring.ErrNotFound) {
-			return nil
-		}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// As with Put, cancellation is honored before the mutation starts. After
+	// that boundary, returning the keychain's result preserves a determinate
+	// migration/compensation decision for callers.
+	err := keychainDelete(options.KeychainService, keychainAccount(contextName))
+	if errors.Is(err, keyring.ErrNotFound) {
+		return nil
+	}
+	return err
 }
 
 func keychainAccount(contextName string) string {

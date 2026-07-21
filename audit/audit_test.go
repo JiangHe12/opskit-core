@@ -11,7 +11,7 @@ import (
 )
 
 func TestAppendWritesJSONL(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.log")
+	path := filepath.Join(privateTestDir(t), "audit.log")
 	err := Append(path, Event{EventType: EventType("resource.create"), Operator: "me", Status: "pending"})
 	if err != nil {
 		t.Fatalf("Append() error = %v", err)
@@ -36,7 +36,7 @@ func TestAppendWritesJSONL(t *testing.T) {
 }
 
 func TestAppendRotatesOversizedActiveLog(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTestDir(t)
 	path := filepath.Join(dir, "audit.log")
 	if err := os.WriteFile(path, []byte(strings.Repeat("x", 32)), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
@@ -61,7 +61,7 @@ func TestAppendRotatesOversizedActiveLog(t *testing.T) {
 }
 
 func TestRotatedFileTimestamp(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.log")
+	path := filepath.Join(privateTestDir(t), "audit.log")
 	rotated := path + ".20260524-010203.log"
 	got, ok := RotatedFileTimestamp(path, rotated)
 	if !ok {
@@ -73,7 +73,7 @@ func TestRotatedFileTimestamp(t *testing.T) {
 }
 
 func TestAppendEncryptsAndQueryDecrypts(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.log")
+	path := filepath.Join(privateTestDir(t), "audit.log")
 	identity, publicKeyPath := writeTestAgePublicKey(t)
 	if err := AppendWithOptions(path, Event{EventType: EventType("resource.create"), Operator: "alice", Status: StatusSuccess},
 		Options{EncryptPublicKeyPath: publicKeyPath}); err != nil {
@@ -96,7 +96,7 @@ func TestAppendEncryptsAndQueryDecrypts(t *testing.T) {
 }
 
 func TestQueryEncryptedWithoutPrivateKeyErrors(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.log")
+	path := filepath.Join(privateTestDir(t), "audit.log")
 	_, publicKeyPath := writeTestAgePublicKey(t)
 	if err := AppendWithOptions(path, Event{EventType: EventType("resource.create"), Status: StatusSuccess},
 		Options{EncryptPublicKeyPath: publicKeyPath}); err != nil {
@@ -109,7 +109,7 @@ func TestQueryEncryptedWithoutPrivateKeyErrors(t *testing.T) {
 }
 
 func TestQueryMixedPlainAndEncryptedRotatedLogs(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTestDir(t)
 	path := filepath.Join(dir, "audit.log")
 	for range 100 {
 		if err := Append(path, Event{EventType: EventType("resource.create"), Operator: "plain", Status: StatusSuccess}); err != nil {
@@ -138,9 +138,16 @@ func writeTestAgePublicKey(t *testing.T) (*age.X25519Identity, string) {
 	if err != nil {
 		t.Fatalf("GenerateX25519Identity() error = %v", err)
 	}
-	path := filepath.Join(t.TempDir(), "audit.pub")
+	path := filepath.Join(privateTestDir(t), "audit.pub")
 	if err := os.WriteFile(path, []byte(identity.Recipient().String()+"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	return identity, path
+}
+
+func privateTestDir(t testing.TB) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "private")
+	secureTestDirectory(t, path)
+	return path
 }

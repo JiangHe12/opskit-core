@@ -18,7 +18,8 @@ import (
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/term"
 
-	"github.com/JiangHe12/opskit-core/apperrors"
+	"github.com/JiangHe12/opskit-core/v2/apperrors"
+	"github.com/JiangHe12/opskit-core/v2/lockfile"
 )
 
 const (
@@ -65,32 +66,66 @@ func (e *encryptedFileBackend) Put(_ context.Context, contextName, password stri
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	entries, err := e.readEntries()
-	if errors.Is(err, ErrNotFound) {
-		entries = make(map[string]string)
-	} else if err != nil {
-		return err
-	}
-	entries[contextName] = password
-	return e.writeEntries(entries)
+	return e.withMutationLock(func() error {
+		entries, err := e.readEntries()
+		if errors.Is(err, ErrNotFound) {
+			entries = make(map[string]string)
+		} else if err != nil {
+			return err
+		}
+		entries[contextName] = password
+		return e.writeEntries(entries)
+	})
 }
 
 func (e *encryptedFileBackend) Delete(_ context.Context, contextName string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	entries, err := e.readEntries()
-	if errors.Is(err, ErrNotFound) {
-		return nil
-	}
+	return e.withMutationLock(func() error {
+		entries, err := e.readEntries()
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if _, ok := entries[contextName]; !ok {
+			return nil
+		}
+		delete(entries, contextName)
+		return e.writeEntries(entries)
+	})
+}
+
+func (e *encryptedFileBackend) withMutationLock(mutate func() error) error {
+	path, err := e.filePath()
 	if err != nil {
 		return err
 	}
-	if _, ok := entries[contextName]; !ok {
-		return nil
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return apperrors.New(apperrors.CodeCredentialStoreError, "failed to create credential directory", err)
 	}
-	delete(entries, contextName)
-	return e.writeEntries(entries)
+	lock := lockfile.New(path)
+	if err := lock.Acquire(); err != nil {
+		return apperrors.New(apperrors.CodeCredentialStoreError, "failed to lock encrypted credentials", err)
+	}
+	operationErr := mutate()
+	if releaseErr := lock.Release(); releaseErr != nil {
+		if operationErr != nil {
+			return apperrors.New(
+				apperrors.CodeCredentialStoreError,
+				"encrypted credential update failed and its lock could not be released",
+				errors.Join(operationErr, releaseErr),
+			)
+		}
+		return apperrors.New(
+			apperrors.CodePartialFailure,
+			"encrypted credentials were updated but their lock could not be released",
+			releaseErr,
+		).WithSuggestion("verify the credential and lock state before retrying")
+	}
+	return operationErr
 }
 
 func (e *encryptedFileBackend) readEntries() (map[string]string, error) {

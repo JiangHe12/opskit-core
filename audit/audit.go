@@ -7,16 +7,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"filippo.io/age"
 
-	"github.com/JiangHe12/opskit-core/apperrors"
-	"github.com/JiangHe12/opskit-core/lockfile"
+	"github.com/JiangHe12/opskit-core/v2/apperrors"
+	"github.com/JiangHe12/opskit-core/v2/lockfile"
 )
 
 // EventType is an audit event category.
@@ -36,6 +38,8 @@ const (
 
 // DefaultMaxSizeBytes is the default active audit log size before rotation.
 const DefaultMaxSizeBytes int64 = 100 * 1024 * 1024
+
+const maxAgeRecipientFileBytes int64 = 64 * 1024
 
 // Event status values written to Event.Status.
 const (
@@ -189,6 +193,69 @@ type BackupPruneDetail struct {
 type Options struct {
 	MaxSizeBytes         int64
 	EncryptPublicKeyPath string
+	IntegrityKeyPath     string
+}
+
+// AppendCommitState reports whether an AppendRecordWithResult call durably
+// committed its record.
+type AppendCommitState string
+
+const (
+	// AppendCommitNotCommitted means the record is absent, including after a
+	// successful truncate-and-sync rollback of a failed write.
+	AppendCommitNotCommitted AppendCommitState = "not-committed"
+	// AppendCommitCommitted means the record reached the platform commit point
+	// and all post-commit bookkeeping completed.
+	AppendCommitCommitted AppendCommitState = "committed"
+	// AppendCommitCommittedPostCommitError means the record reached the
+	// platform commit point, but later checkpoint or lock cleanup failed.
+	AppendCommitCommittedPostCommitError AppendCommitState = "committed-postcommit-error"
+	// AppendCommitIndeterminate means the record may be present because neither
+	// commit nor a durable rollback could be established.
+	AppendCommitIndeterminate AppendCommitState = "indeterminate"
+)
+
+// AppendResult describes the durable record state returned by
+// AppendRecordWithResult.
+type AppendResult struct {
+	State AppendCommitState
+}
+
+// IsCommitted reports whether the record is known to have reached its platform
+// commit point, even if a later operation returned an error.
+func (result AppendResult) IsCommitted() bool {
+	return result.State == AppendCommitCommitted ||
+		result.State == AppendCommitCommittedPostCommitError
+}
+
+type appendRecordRuntime struct {
+	writeFile       func(*os.File, []byte) (int, error)
+	syncFile        func(*os.File) error
+	truncateFile    func(*os.File, int64) error
+	closeFile       func(*os.File) error
+	syncParent      func(string) error
+	writeCheckpoint func(string, auditCheckpoint) error
+	releaseLock     func(*lockfile.Lock) error
+}
+
+var productionAppendRecordRuntime = appendRecordRuntime{
+	writeFile: func(file *os.File, data []byte) (int, error) {
+		return file.Write(data)
+	},
+	syncFile: func(file *os.File) error {
+		return file.Sync()
+	},
+	truncateFile: func(file *os.File, size int64) error {
+		return file.Truncate(size)
+	},
+	closeFile: func(file *os.File) error {
+		return file.Close()
+	},
+	syncParent:      syncParentDirectory,
+	writeCheckpoint: writeCheckpoint,
+	releaseLock: func(lock *lockfile.Lock) error {
+		return lock.Release()
+	},
 }
 
 // DefaultPath returns the default audit log path.
@@ -215,43 +282,234 @@ func AppendWithOptions(path string, event Event, opts Options) error {
 
 // AppendRecord appends one JSONL record using the record's own JSON shape.
 func AppendRecord(path string, record any, opts Options) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to create audit directory", err)
+	_, err := AppendRecordWithResult(path, record, opts)
+	return err
+}
+
+// AppendRecordWithResult appends one JSONL record and reports its durable
+// commit state. Existing active files commit when the appended bytes are
+// fsynced. Newly created active files additionally pass the platform parent
+// directory sync step: POSIX fsyncs the directory, while Windows treats the
+// synced and closed file as the available platform durability boundary because
+// directory handles do not provide the POSIX fsync contract.
+//
+// A write or file-sync failure is rolled back with Truncate followed by Sync
+// while the audit lock is still held. A successful rollback is
+// AppendCommitNotCommitted; a failed rollback is AppendCommitIndeterminate.
+func AppendRecordWithResult(path string, record any, opts Options) (AppendResult, error) {
+	return appendRecordWithResult(path, record, opts, productionAppendRecordRuntime)
+}
+
+func appendRecordWithResult(
+	path string,
+	record any,
+	opts Options,
+	runtime appendRecordRuntime,
+) (result AppendResult, retErr error) {
+	result.State = AppendCommitNotCommitted
+	if err := ensureOwnerOnlyDirectory(filepath.Dir(path)); err != nil {
+		return result, err
 	}
 	lock := lockfile.New(path)
 	if err := lock.Acquire(); err != nil {
-		return err
+		return result, err
 	}
-	defer func() { _ = lock.Release() }()
+	defer func() {
+		if err := runtime.releaseLock(lock); err != nil {
+			if result.State == AppendCommitCommitted {
+				result.State = AppendCommitCommittedPostCommitError
+			}
+			if retErr == nil {
+				retErr = apperrors.New(apperrors.CodeLocalIOError, "failed to release audit append lock", err)
+			}
+		}
+	}()
+	keyPath := effectiveIntegrityKeyPath(path, opts.IntegrityKeyPath)
+	key, checkpoint, checkpointExists, err := prepareAppendIntegrity(path, keyPath)
+	if err != nil {
+		return result, err
+	}
+	headSequence := uint64(0)
+	var headMAC []byte
+	baseSequence := uint64(0)
+	var baseMAC []byte
+	if checkpointExists {
+		baseSequence, baseMAC, err = checkpointBase(checkpoint)
+		if err != nil {
+			return result, apperrors.New(apperrors.CodeValidationFailed, "invalid audit checkpoint base", err)
+		}
+		headSequence, headMAC, err = checkpointHead(checkpoint)
+		if err != nil {
+			return result, apperrors.New(apperrors.CodeValidationFailed, "invalid audit checkpoint head", err)
+		}
+	}
+	sequence, err := nextSequence(headSequence)
+	if err != nil {
+		return result, err
+	}
+	line, mac, err := encodeEnvelope(record, opts.EncryptPublicKeyPath, key, sequence, headMAC)
+	if err != nil {
+		return result, err
+	}
+	if err := validateAuditLineSize(line); err != nil {
+		return result, err
+	}
+	if !checkpointExists {
+		genesis := makeCheckpoint(key, 0, nil, 0, nil)
+		if err := runtime.writeCheckpoint(path, genesis); err != nil {
+			return result, err
+		}
+	}
 	if err := rotateIfNeeded(path, opts.MaxSizeBytes); err != nil {
-		return err
+		return result, err
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	file, created, err := openAuditAppendFile(path)
 	if err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to open audit log", err)
+		return result, err
 	}
-	defer func() { _ = file.Close() }()
-	if err := os.Chmod(path, 0o600); err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to set audit log permissions", err)
-	}
-	line, err := encodeRecordLine(record, opts.EncryptPublicKeyPath)
+	closed := false
+	defer func() {
+		if !closed {
+			_ = file.Close()
+		}
+	}()
+	framedLine, originalSize, err := frameAuditAppend(file, line)
 	if err != nil {
-		return err
+		if closeErr := runtime.closeFile(file); closeErr == nil {
+			closed = true
+		}
+		return result, err
 	}
-	if _, err := file.Write(append(line, '\n')); err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to write audit log", err)
+	if _, err := file.Seek(originalSize, io.SeekStart); err != nil {
+		if closeErr := runtime.closeFile(file); closeErr == nil {
+			closed = true
+		}
+		return result, apperrors.New(apperrors.CodeLocalIOError, "failed to position audit log for append", err)
 	}
-	return nil
+	written, writeErr := runtime.writeFile(file, framedLine)
+	if writeErr != nil || written != len(framedLine) {
+		if writeErr == nil {
+			writeErr = io.ErrShortWrite
+		}
+		rollbackErr := rollbackAuditAppend(file, originalSize, runtime)
+		if closeErr := runtime.closeFile(file); closeErr == nil {
+			closed = true
+		}
+		if rollbackErr != nil {
+			result.State = AppendCommitIndeterminate
+			return result, apperrors.New(
+				apperrors.CodeLocalIOError,
+				"audit append state is indeterminate after write rollback failed",
+				rollbackErr,
+			)
+		}
+		return result, apperrors.New(apperrors.CodeLocalIOError, "failed to write audit log", writeErr)
+	}
+	if err := runtime.syncFile(file); err != nil {
+		rollbackErr := rollbackAuditAppend(file, originalSize, runtime)
+		if closeErr := runtime.closeFile(file); closeErr == nil {
+			closed = true
+		}
+		if rollbackErr != nil {
+			result.State = AppendCommitIndeterminate
+			return result, apperrors.New(
+				apperrors.CodeLocalIOError,
+				"audit append state is indeterminate after sync rollback failed",
+				rollbackErr,
+			)
+		}
+		return result, apperrors.New(apperrors.CodeLocalIOError, "failed to sync audit log", err)
+	}
+	if !created {
+		result.State = AppendCommitCommitted
+	}
+	if err := runtime.closeFile(file); err != nil {
+		if created {
+			result.State = AppendCommitIndeterminate
+		} else {
+			result.State = AppendCommitCommittedPostCommitError
+		}
+		return result, apperrors.New(apperrors.CodeLocalIOError, "failed to close audit log", err)
+	}
+	closed = true
+	if created {
+		if err := runtime.syncParent(path); err != nil {
+			result.State = AppendCommitIndeterminate
+			return result, apperrors.New(apperrors.CodeLocalIOError, "failed to sync audit log directory", err)
+		}
+		result.State = AppendCommitCommitted
+	}
+	nextCheckpoint := makeCheckpoint(key, baseSequence, baseMAC, sequence, mac)
+	if err := runtime.writeCheckpoint(path, nextCheckpoint); err != nil {
+		result.State = AppendCommitCommittedPostCommitError
+		return result, err
+	}
+	return result, nil
 }
 
-func encodeRecordLine(record any, publicKeyPath string) ([]byte, error) {
-	plain, err := json.Marshal(record)
+func rollbackAuditAppend(file *os.File, originalSize int64, runtime appendRecordRuntime) error {
+	if err := runtime.truncateFile(file, originalSize); err != nil {
+		return err
+	}
+	return runtime.syncFile(file)
+}
+
+func openAuditAppendFile(path string) (*os.File, bool, error) {
+	info, err := os.Lstat(path)
+	switch {
+	case err == nil:
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return nil, false, apperrors.New(apperrors.CodeLocalIOError, "audit path must be a regular file", nil)
+		}
+		if err := secureOwnerOnlyFile(path); err != nil {
+			return nil, false, err
+		}
+		file, openErr := os.OpenFile(path, os.O_RDWR, 0o600) //nolint:gosec // Existing audit path was validated above and the audit lock serializes writes.
+		if openErr != nil {
+			return nil, false, apperrors.New(apperrors.CodeLocalIOError, "failed to open audit log", openErr)
+		}
+		return file, false, nil
+	case os.IsNotExist(err):
+		file, openErr := createOwnerOnlyExclusive(path)
+		if openErr != nil {
+			return nil, false, apperrors.New(apperrors.CodeLocalIOError, "failed to create audit log", openErr)
+		}
+		if secureErr := verifyOwnerOnlyFile(path); secureErr != nil {
+			_ = file.Close()
+			_ = os.Remove(path)
+			return nil, false, secureErr
+		}
+		return file, true, nil
+	default:
+		return nil, false, apperrors.New(apperrors.CodeLocalIOError, "failed to inspect audit log", err)
+	}
+}
+
+func frameAuditAppend(file *os.File, line []byte) ([]byte, int64, error) {
+	info, err := file.Stat()
 	if err != nil {
-		return nil, apperrors.New(apperrors.CodeLocalIOError, "failed to marshal audit event", err)
+		return nil, 0, apperrors.New(apperrors.CodeLocalIOError, "failed to stat audit log before append", err)
 	}
-	if strings.TrimSpace(publicKeyPath) == "" {
-		return plain, nil
+	prefix := byte(0)
+	if info.Size() > 0 {
+		var tail [1]byte
+		if _, err := file.ReadAt(tail[:], info.Size()-1); err != nil {
+			return nil, 0, apperrors.New(apperrors.CodeLocalIOError, "failed to inspect audit log framing", err)
+		}
+		if tail[0] != '\n' {
+			prefix = '\n'
+		}
 	}
+	framed := make([]byte, 0, len(line)+2)
+	if prefix != 0 {
+		framed = append(framed, prefix)
+	}
+	framed = append(framed, line...)
+	framed = append(framed, '\n')
+	return framed, info.Size(), nil
+}
+
+func encryptAuditPayload(plain []byte, publicKeyPath string) ([]byte, error) {
 	recipient, err := loadAgeRecipient(publicKeyPath)
 	if err != nil {
 		return nil, err
@@ -268,15 +526,42 @@ func encodeRecordLine(record any, publicKeyPath string) ([]byte, error) {
 	if err := writer.Close(); err != nil {
 		return nil, apperrors.New(apperrors.CodeLocalIOError, "failed to finalize audit encryption", err)
 	}
-	out := make([]byte, base64.StdEncoding.EncodedLen(encrypted.Len()))
-	base64.StdEncoding.Encode(out, encrypted.Bytes())
-	return out, nil
+	return encrypted.Bytes(), nil
 }
 
 func loadAgeRecipient(path string) (age.Recipient, error) {
-	data, err := os.ReadFile(path)
+	file, err := openAuditRecipientFile(path)
 	if err != nil {
 		return nil, apperrors.New(apperrors.CodeLocalIOError, "failed to read audit encryption public key", err)
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, apperrors.New(apperrors.CodeLocalIOError, "failed to stat audit encryption public key", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() > maxAgeRecipientFileBytes {
+		return nil, apperrors.New(
+			apperrors.CodeValidationFailed,
+			"audit encryption public key must be a bounded regular file",
+			nil,
+		)
+	}
+	if err := verifyAuditRecipientFile(file, info, path); err != nil {
+		return nil, err
+	}
+	if err := validateAuditDirectoryChain(filepath.Dir(path), true); err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxAgeRecipientFileBytes+1))
+	if err != nil {
+		return nil, apperrors.New(apperrors.CodeLocalIOError, "failed to read audit encryption public key", err)
+	}
+	if int64(len(data)) > maxAgeRecipientFileBytes {
+		return nil, apperrors.New(
+			apperrors.CodeValidationFailed,
+			"audit encryption public key exceeds the maximum supported size",
+			nil,
+		)
 	}
 	recipient, err := age.ParseX25519Recipient(strings.TrimSpace(string(data)))
 	if err != nil {
@@ -293,6 +578,10 @@ func decryptAuditLine(line string, privateKey string) ([]byte, error) {
 	if !bytes.HasPrefix(decoded, []byte("age-encryption.org/v1")) {
 		return []byte(line), nil
 	}
+	return decryptAgePayload(decoded, privateKey)
+}
+
+func decryptAgePayload(ciphertext []byte, privateKey string) ([]byte, error) {
 	if strings.TrimSpace(privateKey) == "" {
 		return nil, apperrors.New(apperrors.CodeCredentialStoreError, fmt.Sprintf("audit log encrypted; provide %s", config.PrivateKeyEnvVar), nil)
 	}
@@ -300,7 +589,7 @@ func decryptAuditLine(line string, privateKey string) ([]byte, error) {
 	if err != nil {
 		return nil, apperrors.New(apperrors.CodeCredentialStoreError, fmt.Sprintf("failed to parse %s", config.PrivateKeyEnvVar), err)
 	}
-	reader, err := age.Decrypt(bytes.NewReader(decoded), identity)
+	reader, err := age.Decrypt(bytes.NewReader(ciphertext), identity)
 	if err != nil {
 		return nil, apperrors.New(apperrors.CodeCredentialStoreError, "failed to decrypt audit log entry", err)
 	}
@@ -330,6 +619,12 @@ func rotateIfNeeded(path string, maxSize int64) error {
 	if err != nil {
 		return apperrors.New(apperrors.CodeLocalIOError, "failed to stat audit log", err)
 	}
+	if !info.Mode().IsRegular() {
+		return apperrors.New(apperrors.CodeLocalIOError, "audit path must be a regular file", nil)
+	}
+	if err := secureOwnerOnlyFile(path); err != nil {
+		return err
+	}
 	if info.Size() <= maxSize {
 		return nil
 	}
@@ -340,31 +635,51 @@ func rotateIfNeeded(path string, maxSize int64) error {
 	if err := os.Rename(path, rotated); err != nil {
 		return apperrors.New(apperrors.CodeLocalIOError, "failed to rotate audit log", err)
 	}
-	if err := os.Chmod(rotated, 0o600); err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to set rotated audit log permissions", err)
+	if err := syncParentDirectory(rotated); err != nil {
+		return apperrors.New(apperrors.CodeLocalIOError, "failed to sync rotated audit log directory", err)
+	}
+	if err := secureOwnerOnlyFile(rotated); err != nil {
+		return err
 	}
 	return nil
 }
 
 func nextRotatedPath(path string, now time.Time) (string, error) {
-	stamp := now.UTC().Format("20060102-150405")
-	candidate := fmt.Sprintf("%s.%s.log", path, stamp)
-	if _, err := os.Stat(candidate); os.IsNotExist(err) {
-		return candidate, nil
-	} else if err != nil {
-		return "", apperrors.New(apperrors.CodeLocalIOError, "failed to stat rotated audit log", err)
+	stampTime := now.UTC().Truncate(time.Second)
+	ordinal := uint64(0)
+	rotated, err := RotatedFiles(path)
+	if err != nil {
+		return "", err
 	}
-	for i := 1; ; i++ {
-		candidate = fmt.Sprintf("%s.%s.%d.log", path, stamp, i)
-		if _, err := os.Stat(candidate); os.IsNotExist(err) {
+	if len(rotated) > 0 {
+		latestTime, latestOrdinal, ok := rotatedFileOrder(path, rotated[len(rotated)-1])
+		if ok && !stampTime.After(latestTime) {
+			stampTime = latestTime
+			if latestOrdinal == math.MaxUint64 {
+				return "", apperrors.New(apperrors.CodeConflict, "audit rotation ordinal exhausted", nil)
+			}
+			ordinal = latestOrdinal + 1
+		}
+	}
+	stamp := stampTime.Format("20060102-150405")
+	for {
+		candidate := fmt.Sprintf("%s.%s.log", path, stamp)
+		if ordinal > 0 {
+			candidate = fmt.Sprintf("%s.%s.%d.log", path, stamp, ordinal)
+		}
+		if _, err := os.Lstat(candidate); os.IsNotExist(err) {
 			return candidate, nil
 		} else if err != nil {
 			return "", apperrors.New(apperrors.CodeLocalIOError, "failed to stat rotated audit log", err)
 		}
+		if ordinal == math.MaxUint64 {
+			return "", apperrors.New(apperrors.CodeConflict, "audit rotation ordinal exhausted", nil)
+		}
+		ordinal++
 	}
 }
 
-// RotatedFiles returns rotated audit log paths sorted by filename timestamp.
+// RotatedFiles returns strictly named rotated audit logs sorted by timestamp and numeric collision suffix.
 func RotatedFiles(path string) ([]string, error) {
 	matches, err := filepath.Glob(path + ".*.log")
 	if err != nil {
@@ -376,33 +691,58 @@ func RotatedFiles(path string) ([]string, error) {
 			out = append(out, match)
 		}
 	}
-	sortStrings(out)
+	sort.Slice(out, func(i, j int) bool {
+		ti, oi, _ := rotatedFileOrder(path, out[i])
+		tj, oj, _ := rotatedFileOrder(path, out[j])
+		if !ti.Equal(tj) {
+			return ti.Before(tj)
+		}
+		if oi != oj {
+			return oi < oj
+		}
+		return out[i] < out[j]
+	})
 	return out, nil
 }
 
 // RotatedFileTimestamp returns the timestamp encoded in a rotated audit file.
 func RotatedFileTimestamp(activePath, candidate string) (time.Time, bool) {
+	timestamp, _, ok := rotatedFileOrder(activePath, candidate)
+	return timestamp, ok
+}
+
+func rotatedFileOrder(activePath, candidate string) (time.Time, uint64, bool) {
+	if filepath.Clean(filepath.Dir(activePath)) != filepath.Clean(filepath.Dir(candidate)) {
+		return time.Time{}, 0, false
+	}
 	base := filepath.Base(candidate)
 	active := filepath.Base(activePath)
 	if !strings.HasPrefix(base, active+".") || !strings.HasSuffix(base, ".log") {
-		return time.Time{}, false
+		return time.Time{}, 0, false
 	}
-	stamp := strings.TrimSuffix(strings.TrimPrefix(base, active+"."), ".log")
-	if i := strings.Index(stamp, "."); i >= 0 {
-		stamp = stamp[:i]
+	stem := strings.TrimSuffix(strings.TrimPrefix(base, active+"."), ".log")
+	parts := strings.Split(stem, ".")
+	if len(parts) < 1 || len(parts) > 2 {
+		return time.Time{}, 0, false
 	}
-	t, err := time.Parse("20060102-150405", stamp)
+	t, err := time.Parse("20060102-150405", parts[0])
 	if err != nil {
-		return time.Time{}, false
+		return time.Time{}, 0, false
 	}
-	return t.UTC(), true
+	ordinal := uint64(0)
+	if len(parts) == 2 {
+		if parts[1] == "" || (len(parts[1]) > 1 && parts[1][0] == '0') {
+			return time.Time{}, 0, false
+		}
+		ordinal, err = strconv.ParseUint(parts[1], 10, 64)
+		if err != nil || ordinal <= 0 {
+			return time.Time{}, 0, false
+		}
+	}
+	return t.UTC(), ordinal, true
 }
 
 func isRotatedAuditLog(activePath, candidate string) bool {
 	_, ok := RotatedFileTimestamp(activePath, candidate)
 	return ok
-}
-
-func sortStrings(values []string) {
-	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
 }
