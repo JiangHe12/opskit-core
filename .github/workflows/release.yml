@@ -13,20 +13,96 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  release-preflight:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - name: Checkout tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          go-version: 'stable'
-          cache: true
-      - run: go vet -tags=integration ./...
-      - run: go build ./...
-      - run: go test -count=1 ./...
+          fetch-depth: 0
+
+      - name: Verify release metadata and signed annotated tag
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "${tag}" =~ ${semver_re} ]]; then
+            echo "::error::Release tag must be a semantic version (received ${tag})"
+            exit 1
+          fi
+          heading_count=$(grep -Fxc "## ${tag}" CHANGELOG.md || true)
+          if [[ "${heading_count}" -ne 1 ]]; then
+            echo "::error::CHANGELOG.md must contain exactly one heading: ## ${tag}"
+            exit 1
+          fi
+
+          api_url="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}"
+          ref_json=$(curl --fail-with-body --silent --show-error \
+            --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "${api_url}/git/ref/tags/${tag}")
+          object_type=$(jq -r '.object.type' <<<"${ref_json}")
+          object_sha=$(jq -r '.object.sha' <<<"${ref_json}")
+          if [[ "${object_type}" != "tag" || ! "${object_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Release tag ${tag} must be an annotated tag"
+            exit 1
+          fi
+
+          tag_json=$(curl --fail-with-body --silent --show-error \
+            --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "${api_url}/git/tags/${object_sha}")
+          verified=$(jq -r '.verification.verified // false' <<<"${tag_json}")
+          reason=$(jq -r '.verification.reason // "missing"' <<<"${tag_json}")
+          if [[ "${verified}" != "true" ]]; then
+            echo "::error::GitHub did not verify the signature on ${tag} (reason: ${reason})"
+            exit 1
+          fi
+          if [[ $(jq -r '.tag' <<<"${tag_json}") != "${tag}" || $(jq -r '.object.type' <<<"${tag_json}") != "commit" ]]; then
+            echo "::error::Annotated tag object does not describe ${tag} targeting a commit"
+            exit 1
+          fi
+
+          remote_target=$(jq -r '.object.sha' <<<"${tag_json}")
+          if [[ ! "${remote_target}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Annotated tag target is not a full commit SHA"
+            exit 1
+          fi
+          local_target=$(git rev-parse "${tag}^{commit}")
+          if [[ "${remote_target}" != "${local_target}" ]]; then
+            echo "::error::GitHub tag target does not match the checked-out commit"
+            exit 1
+          fi
+
+          git fetch --no-tags --force origin \
+            refs/heads/main:refs/remotes/origin/main
+          main_target=$(git rev-parse 'refs/remotes/origin/main^{commit}')
+          if [[ ! "${main_target}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::origin/main did not resolve to a full commit SHA"
+            exit 1
+          fi
+          if [[ "${remote_target}" != "${main_target}" ]]; then
+            echo "::error::Release tag ${tag} must target origin/main exactly"
+            exit 1
+          fi
+
+  ci:
+    name: CI and vulnerability gates on release commit
+    needs: release-preflight
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
 
   release:
-    needs: test
+    needs: ci
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -37,7 +113,7 @@ jobs:
       - name: Extract changelog section
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
-          BODY=$(awk "/^## ${VERSION}$/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md)
+          BODY=$(awk -v heading="## ${VERSION}" '$0 == heading {found=1; next} found && /^## / {exit} found {print}' CHANGELOG.md)
           if [ -z "$BODY" ]; then
             BODY="See CHANGELOG.md for details."
           fi

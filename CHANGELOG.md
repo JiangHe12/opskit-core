@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+
+- Release automation now requires a GitHub-verified signed annotated tag that
+  exactly targets freshly fetched `origin/main`, plus an exact literal changelog
+  heading, and reruns the complete CI/vulnerability gate on that tag commit.
+
 ## v2.0.0
 
 ### Breaking

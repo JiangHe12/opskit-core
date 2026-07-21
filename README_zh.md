@@ -229,7 +229,9 @@ govulncheck ./...
 ```
 
 `opskit-core` 仅以 Go 模块发布 —— 发布即 git tag（无 npm、无二进制）。每个
-语义化导入大版本维护自己的兼容线；v2 有意要求 `/v2` import 路径。逐版本历史见
+语义化导入大版本维护自己的兼容线；v2 有意要求 `/v2` import 路径。新版本必须使用
+GitHub 验证通过、精确指向最新拉取 `origin/main` 的已签名 annotated tag，且版本号必须在
+`CHANGELOG.md` 中有字面精确标题；完整 CI/漏洞门禁会在该标签提交上重跑。逐版本历史见
 [CHANGELOG.md](CHANGELOG.md)。
 
 ---

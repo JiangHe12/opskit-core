@@ -257,7 +257,10 @@ govulncheck ./...
 
 `opskit-core` ships as a Go module only — releases are git tags (no npm, no
 binaries). Each semantic-import major maintains its own compatibility line;
-v2 intentionally requires the `/v2` import path. See
+v2 intentionally requires the `/v2` import path. New releases require a
+GitHub-verified signed annotated tag that exactly targets freshly fetched
+`origin/main` and whose version has an exact literal `CHANGELOG.md` heading;
+the complete CI/vulnerability gate reruns on that tag commit. See
 [CHANGELOG.md](CHANGELOG.md) for the per-release history.
 
 ---
