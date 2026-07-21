@@ -3,13 +3,51 @@
 package audit
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+type testTokenOwner struct {
+	owner *windows.SID
+}
+
+func TestMain(m *testing.M) {
+	if err := useCurrentUserAsTestDefaultOwner(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "configure Windows test token owner: %v\n", err)
+		os.Exit(1)
+	}
+	os.Exit(m.Run())
+}
+
+func useCurrentUserAsTestDefaultOwner() error {
+	var token windows.Token
+	if err := windows.OpenProcessToken(
+		windows.CurrentProcess(),
+		windows.TOKEN_QUERY|windows.TOKEN_ADJUST_DEFAULT,
+		&token,
+	); err != nil {
+		return err
+	}
+	defer func() { _ = token.Close() }()
+
+	user, err := token.GetTokenUser()
+	if err != nil {
+		return err
+	}
+	owner := testTokenOwner{owner: user.User.Sid}
+	return windows.SetTokenInformation(
+		token,
+		windows.TokenOwner,
+		(*byte)(unsafe.Pointer(&owner)),
+		uint32(unsafe.Sizeof(owner)),
+	)
+}
 
 func TestUniqueAuditSIDsDeduplicatesLocalSystemOwner(t *testing.T) {
 	systemSID, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
@@ -309,8 +347,8 @@ func secureTestDirectory(t testing.TB, path string) {
 			t.Fatalf("setOwnerOnlyACL(%s) error = %v", parent, err)
 		}
 	}
-	if err := os.Mkdir(path, 0o700); err != nil {
-		t.Fatalf("Mkdir(%s) error = %v", path, err)
+	if err := createOwnerOnlyDirectory(path); err != nil {
+		t.Fatalf("createOwnerOnlyDirectory(%s) error = %v", path, err)
 	}
 	if err := setOwnerOnlyACL(path, windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT); err != nil {
 		t.Fatalf("setOwnerOnlyACL(%s) error = %v", path, err)
