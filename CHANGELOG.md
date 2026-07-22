@@ -2,8 +2,12 @@
 
 ## [Unreleased]
 
+## v2.0.1
+
 ### Security
 
+- Upgraded `golang.org/x/text` from v0.37.0 to v0.39.0, eliminating the
+  imported-package `GO-2026-5970` finding from the supported dependency graph.
 - Release automation now requires a GitHub-verified signed annotated tag that
   exactly targets freshly fetched `origin/main`, plus an exact literal changelog
   heading, and reruns the complete CI/vulnerability gate on that tag commit.
