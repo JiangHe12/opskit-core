@@ -54,7 +54,7 @@
 ## 📦 安装
 
 ```sh
-go get github.com/JiangHe12/opskit-core/v2@v2.0.2
+go get github.com/JiangHe12/opskit-core/v2@v2.0.3
 ```
 
 需要 **Go 1.25+**。v2 遵循 Go 语义化导入版本并使用 `/v2` 模块后缀。

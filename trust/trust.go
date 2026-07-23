@@ -26,12 +26,13 @@ type Pin struct {
 
 // Store stores TOFU pins at a TSV file path.
 type Store struct {
-	path string
+	path      string
+	writeFile func(string, []byte) (securefile.WriteResult, error)
 }
 
 // New creates a Store for the given TSV pin file path.
 func New(path string) *Store {
-	return &Store{path: path}
+	return &Store{path: path, writeFile: securefile.WriteFileWithResult}
 }
 
 // PinChangedError reports a pinned endpoint presenting different material for the same algorithm.
@@ -75,7 +76,9 @@ type storedPin struct {
 	Material    string
 }
 
-// VerifyOrPin verifies candidate against an existing pin or appends it on first use.
+// VerifyOrPin verifies candidate against an existing pin or appends it on first
+// use. notify is called whenever the new pin is known to have been committed,
+// including when a later durability step returns an error.
 func (s *Store) VerifyOrPin(address string, candidate Pin, notify func(Pin)) error {
 	if err := securefile.EnsureParent(s.path); err != nil {
 		return apperrors.New(apperrors.CodeLocalIOError, "failed to create trust directory", err)
@@ -134,11 +137,12 @@ func (s *Store) VerifyOrPin(address string, candidate Pin, notify func(Pin)) err
 			PinnedAlgorithms: algorithms,
 		}
 	}
-	if err := appendPin(s.path, actual); err != nil {
-		return err
-	}
-	if notify != nil {
+	result, err := appendPin(s.path, actual, s.writeFile)
+	if result.IsCommitted() && notify != nil {
 		notify(actual)
+	}
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -207,12 +211,17 @@ func validateDuplicatePins(pins []storedPin) error {
 	return nil
 }
 
-func appendPin(path string, pin Pin) error {
+func appendPin(
+	path string,
+	pin Pin,
+	writeFile func(string, []byte) (securefile.WriteResult, error),
+) (securefile.WriteResult, error) {
+	result := securefile.WriteResult{State: securefile.WriteCommitNotCommitted}
 	data, err := securefile.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		data = nil
 	} else if err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to read trust pins", err)
+		return result, apperrors.New(apperrors.CodeLocalIOError, "failed to read trust pins", err)
 	}
 	var next bytes.Buffer
 	next.Write(data)
@@ -227,10 +236,14 @@ func appendPin(path string, pin Pin) error {
 		pin.Fingerprint,
 		base64.StdEncoding.EncodeToString(pin.Material),
 	)
-	if err := securefile.WriteFile(path, next.Bytes()); err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to write trust pin", err)
+	if writeFile == nil {
+		writeFile = securefile.WriteFileWithResult
 	}
-	return nil
+	result, err = writeFile(path, next.Bytes())
+	if err != nil {
+		return result, apperrors.New(apperrors.CodeLocalIOError, "failed to write trust pin", err)
+	}
+	return result, nil
 }
 
 // CheckPermissions validates an existing pin file without modifying it.

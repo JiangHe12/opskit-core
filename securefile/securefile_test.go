@@ -18,8 +18,12 @@ func TestWriteReadAndCheckFile(t *testing.T) {
 	if err := WriteFile(path, []byte("first")); err != nil {
 		t.Fatalf("WriteFile(first) error = %v", err)
 	}
-	if err := WriteFile(path, []byte("second")); err != nil {
-		t.Fatalf("WriteFile(second) error = %v", err)
+	result, err := WriteFileWithResult(path, []byte("second"))
+	if err != nil {
+		t.Fatalf("WriteFileWithResult(second) error = %v", err)
+	}
+	if result.State != WriteCommitCommitted || !result.IsCommitted() {
+		t.Fatalf("WriteFileWithResult(second) result = %#v, want committed", result)
 	}
 	data, err := ReadFile(path)
 	if err != nil {
@@ -93,6 +97,34 @@ func TestWriteFileSyncsBeforeAtomicReplace(t *testing.T) {
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("events = %#v, want %#v", events, want)
 	}
+}
+
+func TestWriteFileResultDistinguishesCommittedPostCommitFailure(t *testing.T) {
+	path := secureTestPath(t, "state")
+	if err := WriteFile(path, []byte("old")); err != nil {
+		t.Fatalf("WriteFile(old) error = %v", err)
+	}
+	injected := errors.New("injected parent sync failure")
+	runtime := productionWriteRuntime
+	runtime.syncParent = func(string) error {
+		return injected
+	}
+
+	result, err := writeFileWithResultRuntime(path, []byte("new"), runtime)
+	if err == nil || !errors.Is(err, injected) {
+		t.Fatalf("writeFileWithResultRuntime() error = %v, want injected failure", err)
+	}
+	if result.State != WriteCommitCommittedPostCommitError || !result.IsCommitted() {
+		t.Fatalf("write result = %#v, want committed post-commit error", result)
+	}
+	data, readErr := ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("ReadFile() error = %v", readErr)
+	}
+	if string(data) != "new" {
+		t.Fatalf("committed file = %q, want new", data)
+	}
+	assertNoTempArtifacts(t, path)
 }
 
 func TestWriteFilePreCommitFailuresPreserveOldFileAndCleanTemp(t *testing.T) {

@@ -55,7 +55,7 @@ It's the foundation under [`dbgov-cli`](https://github.com/JiangHe12/dbgov-cli) 
 ## 📦 Install
 
 ```sh
-go get github.com/JiangHe12/opskit-core/v2@v2.0.2
+go get github.com/JiangHe12/opskit-core/v2@v2.0.3
 ```
 
 Requires **Go 1.25+**. Version 2 follows Go semantic import versioning and uses

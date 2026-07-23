@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## v2.0.3
+
+### Fixed
+
+- `securefile.WriteFileWithResult` now distinguishes writes that did not commit
+  from replacements that committed before a later durability error. The TOFU
+  trust store uses that state so a persisted first-use pin is still reported
+  exactly once when parent-directory sync fails after replacement.
+
 ## v2.0.2
 
 ### Security

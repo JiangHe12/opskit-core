@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/JiangHe12/opskit-core/v2/apperrors"
+	"github.com/JiangHe12/opskit-core/v2/securefile"
 )
 
 func TestVerifyOrPinTruthTableByAddress(t *testing.T) {
@@ -76,6 +77,62 @@ func TestVerifyOrPinTruthTableByAddress(t *testing.T) {
 	}
 	if len(stored) != 1 || stored[0].Algorithm != original.Algorithm {
 		t.Fatalf("stored pins = %#v, want only original pin", stored)
+	}
+}
+
+func TestVerifyOrPinNotifiesWhenPinCommittedBeforePostCommitError(t *testing.T) {
+	path := trustTestPath(t)
+	store := New(path)
+	injected := errors.New("injected post-commit failure")
+	store.writeFile = func(path string, data []byte) (securefile.WriteResult, error) {
+		if err := securefile.WriteFile(path, data); err != nil {
+			return securefile.WriteResult{State: securefile.WriteCommitNotCommitted}, err
+		}
+		return securefile.WriteResult{
+			State: securefile.WriteCommitCommittedPostCommitError,
+		}, injected
+	}
+	address := "server.example:22"
+	candidate := testPin("ssh-ed25519", "SHA256:committed", "committed-key")
+	var notifications []Pin
+	err := store.VerifyOrPin(address, candidate, func(pin Pin) {
+		notifications = append(notifications, pin)
+	})
+	if err == nil || !errors.Is(err, injected) {
+		t.Fatalf("VerifyOrPin() error = %v, want injected post-commit failure", err)
+	}
+	if len(notifications) != 1 || notifications[0].Address != address {
+		t.Fatalf("TOFU notifications = %#v, want committed pin", notifications)
+	}
+
+	if err := New(path).VerifyOrPin(address, candidate, func(Pin) {
+		t.Fatal("existing committed pin notified twice")
+	}); err != nil {
+		t.Fatalf("VerifyOrPin(existing) error = %v", err)
+	}
+}
+
+func TestVerifyOrPinDoesNotNotifyWhenPinWasNotCommitted(t *testing.T) {
+	path := trustTestPath(t)
+	store := New(path)
+	injected := errors.New("injected pre-commit failure")
+	store.writeFile = func(string, []byte) (securefile.WriteResult, error) {
+		return securefile.WriteResult{State: securefile.WriteCommitNotCommitted}, injected
+	}
+	notifications := 0
+	err := store.VerifyOrPin(
+		"server.example:22",
+		testPin("ssh-ed25519", "SHA256:not-committed", "not-committed-key"),
+		func(Pin) { notifications++ },
+	)
+	if err == nil || !errors.Is(err, injected) {
+		t.Fatalf("VerifyOrPin() error = %v, want injected pre-commit failure", err)
+	}
+	if notifications != 0 {
+		t.Fatalf("TOFU notifications = %d, want 0", notifications)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("trust pin file error = %v, want not exist", statErr)
 	}
 }
 

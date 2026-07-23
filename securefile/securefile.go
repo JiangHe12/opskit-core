@@ -17,6 +17,33 @@ import (
 
 const maxTempCreateAttempts = 100
 
+// WriteCommitState reports whether an atomic secure-file replacement reached
+// its commit point.
+type WriteCommitState string
+
+const (
+	// WriteCommitNotCommitted means the target was not replaced.
+	WriteCommitNotCommitted WriteCommitState = "not-committed"
+	// WriteCommitCommitted means the target was replaced and all requested
+	// durability steps completed.
+	WriteCommitCommitted WriteCommitState = "committed"
+	// WriteCommitCommittedPostCommitError means the target was replaced, but a
+	// later durability step failed. Callers must not retry as if no write
+	// occurred.
+	WriteCommitCommittedPostCommitError WriteCommitState = "committed-postcommit-error"
+)
+
+// WriteResult describes the commit state of WriteFileWithResult.
+type WriteResult struct {
+	State WriteCommitState
+}
+
+// IsCommitted reports whether the target is known to have been replaced.
+func (result WriteResult) IsCommitted() bool {
+	return result.State == WriteCommitCommitted ||
+		result.State == WriteCommitCommittedPostCommitError
+}
+
 type writeRuntime struct {
 	write      func(*os.File, []byte) (int, error)
 	sync       func(*os.File) error
@@ -106,20 +133,39 @@ func ReadFile(path string) ([]byte, error) {
 // exclusively-created temporary file in the same directory, syncs the file
 // before replacement, and syncs the parent directory on Unix.
 func WriteFile(path string, data []byte) error {
-	return writeFileWithRuntime(path, data, productionWriteRuntime)
+	_, err := WriteFileWithResult(path, data)
+	return err
 }
 
-func writeFileWithRuntime(path string, data []byte, runtime writeRuntime) (retErr error) {
+// WriteFileWithResult atomically replaces path with owner-only data and reports
+// whether the replacement reached its commit point. A non-nil error with
+// WriteCommitCommittedPostCommitError means the target was replaced and must
+// not be treated as unchanged.
+func WriteFileWithResult(path string, data []byte) (WriteResult, error) {
+	return writeFileWithResultRuntime(path, data, productionWriteRuntime)
+}
+
+func writeFileWithRuntime(path string, data []byte, runtime writeRuntime) error {
+	_, err := writeFileWithResultRuntime(path, data, runtime)
+	return err
+}
+
+func writeFileWithResultRuntime(
+	path string,
+	data []byte,
+	runtime writeRuntime,
+) (result WriteResult, retErr error) {
+	result.State = WriteCommitNotCommitted
 	resolved, err := resolveTarget(path)
 	if err != nil {
-		return err
+		return result, err
 	}
 	if err := walkDirectoryChain(filepath.Dir(resolved), true); err != nil {
-		return err
+		return result, err
 	}
 	existed, err := checkResolvedFile(resolved)
 	if err != nil {
-		return err
+		return result, err
 	}
 
 	file, tempPath, err := createOwnerOnlyTemp(
@@ -127,7 +173,7 @@ func writeFileWithRuntime(path string, data []byte, runtime writeRuntime) (retEr
 		"."+filepath.Base(resolved)+".tmp-",
 	)
 	if err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to create secure temporary file", err)
+		return result, apperrors.New(apperrors.CodeLocalIOError, "failed to create secure temporary file", err)
 	}
 	defer func() {
 		if tempPath == "" {
@@ -155,40 +201,42 @@ func writeFileWithRuntime(path string, data []byte, runtime writeRuntime) (retEr
 		err = io.ErrShortWrite
 	}
 	if err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to write secure temporary file", err)
+		return result, apperrors.New(apperrors.CodeLocalIOError, "failed to write secure temporary file", err)
 	}
 	if err := runtime.sync(file); err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to sync secure temporary file", err)
+		return result, apperrors.New(apperrors.CodeLocalIOError, "failed to sync secure temporary file", err)
 	}
 	if err := runtime.close(file); err != nil {
 		_ = file.Close()
 		file = nil
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to close secure temporary file", err)
+		return result, apperrors.New(apperrors.CodeLocalIOError, "failed to close secure temporary file", err)
 	}
 	file = nil
 
 	if err := walkDirectoryChain(filepath.Dir(resolved), false); err != nil {
-		return err
+		return result, err
 	}
 	existsNow, err := checkResolvedFile(resolved)
 	if err != nil {
-		return err
+		return result, err
 	}
 	if existsNow != existed {
-		return apperrors.New(
+		return result, apperrors.New(
 			apperrors.CodeConflict,
 			"secure file target changed while replacement was prepared",
 			nil,
 		)
 	}
 	if err := runtime.replace(tempPath, resolved); err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to atomically replace secure file", err)
+		return result, apperrors.New(apperrors.CodeLocalIOError, "failed to atomically replace secure file", err)
 	}
 	tempPath = ""
+	result.State = WriteCommitCommitted
 	if err := runtime.syncParent(resolved); err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to sync secure file parent directory", err)
+		result.State = WriteCommitCommittedPostCommitError
+		return result, apperrors.New(apperrors.CodeLocalIOError, "failed to sync secure file parent directory", err)
 	}
-	return nil
+	return result, nil
 }
 
 func checkResolvedFile(path string) (bool, error) {
