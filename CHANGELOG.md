@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## v2.0.2
+
+### Security
+
+- Added the shared `securefile` package for owner-only, no-follow reads and
+  durable atomic replacement on Unix and Windows, including parent-directory,
+  owner, ACL, symlink/reparse-point, and regular-file validation.
+- Migrated context, encrypted credential, and TOFU trust stores to the shared
+  secure file boundary. Trust updates are now locked and atomically replace the
+  complete store, preventing concurrent lost updates and predictable temporary
+  file attacks.
+- Context loading now rejects additional YAML documents, and trust loading
+  rejects conflicting duplicate records instead of accepting ambiguous
+  security state.
+
+### Changed
+
+- Upgraded `golang.org/x/crypto`, `x/net`, `x/sys`, and `x/term` to their current
+  patched releases.
+
 ## v2.0.1
 
 ### Security

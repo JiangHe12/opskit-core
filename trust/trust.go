@@ -5,14 +5,15 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/JiangHe12/opskit-core/v2/apperrors"
 	"github.com/JiangHe12/opskit-core/v2/lockfile"
+	"github.com/JiangHe12/opskit-core/v2/securefile"
 )
 
 // Pin is one trust-on-first-use endpoint material record.
@@ -76,7 +77,7 @@ type storedPin struct {
 
 // VerifyOrPin verifies candidate against an existing pin or appends it on first use.
 func (s *Store) VerifyOrPin(address string, candidate Pin, notify func(Pin)) error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+	if err := securefile.EnsureParent(s.path); err != nil {
 		return apperrors.New(apperrors.CodeLocalIOError, "failed to create trust directory", err)
 	}
 	lock := lockfile.New(s.path)
@@ -85,9 +86,6 @@ func (s *Store) VerifyOrPin(address string, candidate Pin, notify func(Pin)) err
 	}
 	defer func() { _ = lock.Release() }()
 
-	if err := securePinFile(s.path); err != nil {
-		return err
-	}
 	pins, err := loadPins(s.path)
 	if err != nil {
 		return err
@@ -107,16 +105,16 @@ func (s *Store) VerifyOrPin(address string, candidate Pin, notify func(Pin)) err
 			continue
 		}
 		sameAlgorithmPins = append(sameAlgorithmPins, existing)
-		decoded, decodeErr := base64.StdEncoding.DecodeString(existing.Material)
-		if decodeErr != nil {
-			return apperrors.New(apperrors.CodeLocalIOError, "failed to parse trust pin", decodeErr)
-		}
-		if bytes.Equal(decoded, candidate.Material) {
-			return nil
-		}
 	}
 	if len(sameAlgorithmPins) > 0 {
 		existing := sameAlgorithmPins[0]
+		expectedMaterial, decodeErr := base64.StdEncoding.DecodeString(existing.Material)
+		if decodeErr != nil {
+			return apperrors.New(apperrors.CodeLocalIOError, "failed to parse trust pin", decodeErr)
+		}
+		if existing.Fingerprint == candidate.Fingerprint && bytes.Equal(expectedMaterial, candidate.Material) {
+			return nil
+		}
 		return &PinChangedError{
 			Address:             address,
 			Algorithm:           candidate.Algorithm,
@@ -146,17 +144,16 @@ func (s *Store) VerifyOrPin(address string, candidate Pin, notify func(Pin)) err
 }
 
 func loadPins(path string) ([]storedPin, error) {
-	file, err := os.Open(path) //nolint:gosec // Configured trust-store path is inspected for symlinks and locked before this call.
-	if os.IsNotExist(err) {
+	data, err := securefile.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, apperrors.New(apperrors.CodeLocalIOError, "failed to open trust pins", err)
 	}
-	defer func() { _ = file.Close() }()
 
 	var pins []storedPin
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -176,62 +173,72 @@ func loadPins(path string) ([]storedPin, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, apperrors.New(apperrors.CodeLocalIOError, "failed to read trust pins", err)
 	}
+	if err := validateDuplicatePins(pins); err != nil {
+		return nil, err
+	}
 	return pins, nil
 }
 
+func validateDuplicatePins(pins []storedPin) error {
+	type pinKey struct {
+		address   string
+		algorithm string
+	}
+	seen := make(map[pinKey]storedPin, len(pins))
+	for _, pin := range pins {
+		key := pinKey{address: pin.Address, algorithm: pin.Algorithm}
+		existing, duplicate := seen[key]
+		if !duplicate {
+			seen[key] = pin
+			continue
+		}
+		expectedMaterial, err := base64.StdEncoding.DecodeString(existing.Material)
+		if err != nil {
+			return apperrors.New(apperrors.CodeLocalIOError, "failed to parse trust pin", err)
+		}
+		actualMaterial, err := base64.StdEncoding.DecodeString(pin.Material)
+		if err != nil {
+			return apperrors.New(apperrors.CodeLocalIOError, "failed to parse trust pin", err)
+		}
+		if existing.Fingerprint != pin.Fingerprint || !bytes.Equal(expectedMaterial, actualMaterial) {
+			return apperrors.New(apperrors.CodeLocalIOError, "conflicting duplicate trust pin records", nil)
+		}
+	}
+	return nil
+}
+
 func appendPin(path string, pin Pin) error {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // Configured trust-store path is locked and secured immediately after creation.
-	if err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to open trust pins", err)
+	data, err := securefile.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		data = nil
+	} else if err != nil {
+		return apperrors.New(apperrors.CodeLocalIOError, "failed to read trust pins", err)
 	}
-	defer func() { _ = file.Close() }()
-	if err := os.Chmod(path, 0o600); err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to secure trust pins", err)
+	var next bytes.Buffer
+	next.Write(data)
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		next.WriteByte('\n')
 	}
-	if err := setPinFileACL(path); err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to secure trust pins", err)
-	}
-	if _, err := fmt.Fprintf(file, "%s\t%s\t%s\t%s\n", pin.Address, pin.Algorithm, pin.Fingerprint, base64.StdEncoding.EncodeToString(pin.Material)); err != nil {
+	_, _ = fmt.Fprintf(
+		&next,
+		"%s\t%s\t%s\t%s\n",
+		pin.Address,
+		pin.Algorithm,
+		pin.Fingerprint,
+		base64.StdEncoding.EncodeToString(pin.Material),
+	)
+	if err := securefile.WriteFile(path, next.Bytes()); err != nil {
 		return apperrors.New(apperrors.CodeLocalIOError, "failed to write trust pin", err)
 	}
 	return nil
 }
 
-func securePinFile(path string) error {
-	info, err := os.Lstat(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to inspect trust pins", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return apperrors.New(apperrors.CodeLocalIOError, "trust pin path must be a regular file", nil)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to secure trust pins", err)
-	}
-	if err := setPinFileACL(path); err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to secure trust pins", err)
-	}
-	return verifyPinFileSecurity(path)
-}
-
 // CheckPermissions validates an existing pin file without modifying it.
 // A missing file is valid because TOFU has not initialized the store yet.
 func CheckPermissions(path string) (bool, error) {
-	info, err := os.Lstat(path)
-	if os.IsNotExist(err) {
-		return false, nil
-	}
+	exists, err := securefile.CheckFile(path)
 	if err != nil {
-		return false, apperrors.New(apperrors.CodeLocalIOError, "failed to inspect trust pins", err)
+		return exists, apperrors.New(apperrors.CodeLocalIOError, "trust pin permissions are insecure", err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return true, apperrors.New(apperrors.CodeLocalIOError, "trust pin path must be a regular file", nil)
-	}
-	if err := verifyPinFileSecurity(path); err != nil {
-		return true, apperrors.New(apperrors.CodeLocalIOError, "trust pin permissions are insecure", err)
-	}
-	return true, nil
+	return exists, nil
 }

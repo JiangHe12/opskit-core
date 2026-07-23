@@ -43,9 +43,17 @@ func setTestHome(t *testing.T) string {
 	t.Helper()
 
 	home := t.TempDir()
+	secureTestRoot(t, home)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	return home
+}
+
+func privateTestPath(t *testing.T, name string) string {
+	t.Helper()
+	root := t.TempDir()
+	secureTestRoot(t, root)
+	return filepath.Join(root, name)
 }
 
 func TestStoreLifecycleSetUseCurrentDelete(t *testing.T) {
@@ -109,7 +117,7 @@ func TestStoreLifecycleSetUseCurrentDelete(t *testing.T) {
 func TestStoreRejectsUnsupportedAPIVersion(t *testing.T) {
 	configureTestStore(t)
 
-	path := filepath.Join(t.TempDir(), "config.yaml")
+	path := privateTestPath(t, "config.yaml")
 	content := []byte("apiVersion: old\ncurrent-context: prod\ncontexts:\n  prod:\n    server: https://example.test\n    backend: nacos\n")
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
@@ -154,7 +162,7 @@ contexts:
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "config.yaml")
+			path := privateTestPath(t, "config.yaml")
 			if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
 				t.Fatalf("WriteFile() error = %v", err)
 			}
@@ -167,10 +175,30 @@ contexts:
 	}
 }
 
+func TestStoreRejectsAdditionalYAMLDocuments(t *testing.T) {
+	configureTestStore(t)
+
+	path := privateTestPath(t, "config.yaml")
+	content := []byte(`apiVersion: test.io/context/v1
+contexts: {}
+---
+apiVersion: test.io/context/v1
+contexts: {}
+`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	SetConfigPath(path)
+
+	if _, err := testStore.Load(); err == nil {
+		t.Fatal("Load() error = nil, want multiple-document rejection")
+	}
+}
+
 func TestStoreUpdateRejectsUnknownYAMLFieldsBeforeCallback(t *testing.T) {
 	configureTestStore(t)
 
-	path := filepath.Join(t.TempDir(), "config.yaml")
+	path := privateTestPath(t, "config.yaml")
 	content := []byte(`apiVersion: test.io/context/v1
 current-context: prod
 contexts:
@@ -200,7 +228,7 @@ contexts:
 func TestStoreRoundTripKeepsFlatContextShape(t *testing.T) {
 	configureTestStore(t)
 
-	path := filepath.Join(t.TempDir(), "config.yaml")
+	path := privateTestPath(t, "config.yaml")
 	content := []byte(`apiVersion: test.io/context/v1
 current-context: prod
 contexts:
@@ -282,7 +310,7 @@ contexts:
 func TestStoreAppliesContextDefaults(t *testing.T) {
 	configureTestStore(t)
 
-	path := filepath.Join(t.TempDir(), "config.yaml")
+	path := privateTestPath(t, "config.yaml")
 	content := []byte("apiVersion: test.io/context/v1\ncurrent-context: prod\ncontexts:\n  prod:\n    server: https://example.test\n    backend: nacos\n")
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
@@ -312,7 +340,7 @@ func TestStoreWithoutBaseRoundTripDoesNotRequireBase(t *testing.T) {
 	configureTestStore(t)
 	store := NewStoreWithoutBase[noBaseContext]()
 
-	path := filepath.Join(t.TempDir(), "config.yaml")
+	path := privateTestPath(t, "config.yaml")
 	content := []byte(`apiVersion: test.io/context/v1
 current-context: prod
 contexts:

@@ -79,7 +79,7 @@ func TestEncryptedFileDeleteMissingIsNoop(t *testing.T) {
 }
 
 func TestEncryptedFileWrongPasswordFails(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "credentials.enc")
+	path := encryptedFileTestPath(t)
 	backend := newTestEncryptedFileBackendAt(t, path, "password-a")
 	if err := backend.Put(context.Background(), "dev", "secret"); err != nil {
 		t.Fatalf("Put() error = %v", err)
@@ -169,7 +169,7 @@ func TestEncryptedFilePutWaitsForCrossProcessLock(t *testing.T) {
 }
 
 func TestEncryptedFileConcurrentBackendInstancesDoNotLoseUpdates(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "credentials.enc")
+	path := encryptedFileTestPath(t)
 	t.Setenv("OPSKIT_MASTER_PASSWORD", "test-pass-123")
 	backends := []*encryptedFileBackend{{path: path}, {path: path}}
 	start := make(chan struct{})
@@ -207,11 +207,18 @@ func TestEncryptedFileConcurrentBackendInstancesDoNotLoseUpdates(t *testing.T) {
 
 func newTestEncryptedFileBackend(t *testing.T) *encryptedFileBackend {
 	t.Helper()
-	return newTestEncryptedFileBackendAt(t, filepath.Join(t.TempDir(), "credentials.enc"), "test-pass-123")
+	return newTestEncryptedFileBackendAt(t, encryptedFileTestPath(t), "test-pass-123")
 }
 
 func newTestEncryptedFileBackendAt(t *testing.T, path string, password string) *encryptedFileBackend {
 	t.Helper()
 	t.Setenv("OPSKIT_MASTER_PASSWORD", password)
 	return &encryptedFileBackend{path: path}
+}
+
+func encryptedFileTestPath(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	secureCredstoreTestRoot(t, root)
+	return filepath.Join(root, "credentials.enc")
 }

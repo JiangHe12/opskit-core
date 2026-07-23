@@ -1,8 +1,10 @@
 package trust
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,7 +16,7 @@ import (
 )
 
 func TestVerifyOrPinTruthTableByAddress(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pins.tsv")
+	path := trustTestPath(t)
 	store := New(path)
 	address := "server.example:22"
 	original := testPin("ssh-ed25519", "SHA256:original", "original-key")
@@ -34,6 +36,17 @@ func TestVerifyOrPinTruthTableByAddress(t *testing.T) {
 
 	if err := store.VerifyOrPin(address, original, nil); err != nil {
 		t.Fatalf("same material VerifyOrPin() error = %v", err)
+	}
+
+	for _, candidate := range []Pin{
+		testPin("ssh-ed25519", "SHA256:changed", "original-key"),
+		testPin("ssh-ed25519", "SHA256:original", "changed-key"),
+	} {
+		err := store.VerifyOrPin(address, candidate, nil)
+		var changed *PinChangedError
+		if !errors.As(err, &changed) {
+			t.Fatalf("partially matching same-algorithm error = %T %v", err, err)
+		}
 	}
 
 	err := store.VerifyOrPin(address, testPin("ssh-ed25519", "SHA256:changed", "changed-key"), nil)
@@ -66,8 +79,95 @@ func TestVerifyOrPinTruthTableByAddress(t *testing.T) {
 	}
 }
 
+func TestVerifyOrPinRejectsConflictingLegacyDuplicates(t *testing.T) {
+	address := "server.example:22"
+	tests := []struct {
+		name   string
+		first  Pin
+		second Pin
+	}{
+		{
+			name:   "different fingerprint",
+			first:  testPin("ssh-ed25519", "SHA256:first", "same-key"),
+			second: testPin("ssh-ed25519", "SHA256:second", "same-key"),
+		},
+		{
+			name:   "different material",
+			first:  testPin("ssh-ed25519", "SHA256:same", "first-key"),
+			second: testPin("ssh-ed25519", "SHA256:same", "second-key"),
+		},
+	}
+	for _, tt := range tests {
+		for candidateIndex, candidate := range []Pin{tt.first, tt.second} {
+			t.Run(fmt.Sprintf("%s/candidate-%d", tt.name, candidateIndex+1), func(t *testing.T) {
+				path := trustTestPath(t)
+				original := []byte(strings.Join([]string{
+					storedPinLine(address, tt.first),
+					storedPinLine(address, tt.second),
+					"",
+				}, "\n"))
+				if err := os.WriteFile(path, original, 0o600); err != nil {
+					t.Fatalf("WriteFile() error = %v", err)
+				}
+
+				notifications := 0
+				err := New(path).VerifyOrPin(address, candidate, func(Pin) {
+					notifications++
+				})
+				if err == nil {
+					t.Fatal("VerifyOrPin() error = nil, want conflicting duplicate rejection")
+				}
+				if appErr := apperrors.AsAppError(err); appErr.Code != apperrors.CodeLocalIOError {
+					t.Fatalf("error code = %s, want %s", appErr.Code, apperrors.CodeLocalIOError)
+				}
+				if !strings.Contains(err.Error(), "conflicting duplicate trust pin records") {
+					t.Fatalf("error = %v", err)
+				}
+				if notifications != 0 {
+					t.Fatalf("notifications = %d, want 0", notifications)
+				}
+				after, readErr := os.ReadFile(path)
+				if readErr != nil {
+					t.Fatalf("ReadFile() error = %v", readErr)
+				}
+				if !bytes.Equal(after, original) {
+					t.Fatalf("trust store changed: got %q, want %q", after, original)
+				}
+			})
+		}
+	}
+}
+
+func TestVerifyOrPinAcceptsIdenticalLegacyDuplicatesWithoutRewrite(t *testing.T) {
+	path := trustTestPath(t)
+	address := "server.example:22"
+	candidate := testPin("ssh-ed25519", "SHA256:same", "same-key")
+	line := storedPinLine(address, candidate)
+	original := []byte(line + "\n" + line + "\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	notifications := 0
+	if err := New(path).VerifyOrPin(address, candidate, func(Pin) {
+		notifications++
+	}); err != nil {
+		t.Fatalf("VerifyOrPin() error = %v", err)
+	}
+	if notifications != 0 {
+		t.Fatalf("notifications = %d, want 0", notifications)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !bytes.Equal(after, original) {
+		t.Fatalf("trust store changed: got %q, want %q", after, original)
+	}
+}
+
 func TestVerifyOrPinReadsLegacyTSVAndSkipsComments(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pins.tsv")
+	path := trustTestPath(t)
 	material := []byte("legacy-material")
 	content := strings.Join([]string{
 		"# existing pins",
@@ -90,7 +190,7 @@ func TestVerifyOrPinReadsLegacyTSVAndSkipsComments(t *testing.T) {
 }
 
 func TestVerifyOrPinMalformedRecordFails(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pins.tsv")
+	path := trustTestPath(t)
 	if err := os.WriteFile(path, []byte("server.example:22\tssh-ed25519\tSHA256:missing-material\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -105,7 +205,7 @@ func TestVerifyOrPinMalformedRecordFails(t *testing.T) {
 }
 
 func TestVerifyOrPinMalformedBase64ForMatchingAlgorithmFails(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pins.tsv")
+	path := trustTestPath(t)
 	if err := os.WriteFile(path, []byte("server.example:22\tssh-ed25519\tSHA256:bad\t%%%not-base64%%%\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -124,9 +224,11 @@ func TestVerifyOrPinRejectsSymlink(t *testing.T) {
 		t.Skip("Windows symlink creation requires privileges not guaranteed in local test runs")
 	}
 	dir := t.TempDir()
+	secureTrustTestRoot(t, dir)
 	target := filepath.Join(dir, "target.tsv")
 	path := filepath.Join(dir, "pins.tsv")
-	if err := os.WriteFile(target, nil, 0o600); err != nil {
+	const original = "referent-must-not-change"
+	if err := os.WriteFile(target, []byte(original), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	if err := os.Symlink(target, path); err != nil {
@@ -137,13 +239,27 @@ func TestVerifyOrPinRejectsSymlink(t *testing.T) {
 	if err == nil {
 		t.Fatal("VerifyOrPin() error = nil, want symlink rejection")
 	}
-	if !strings.Contains(err.Error(), "trust pin path must be a regular file") {
-		t.Fatalf("error = %v", err)
+	if appErr := apperrors.AsAppError(err); appErr.Code != apperrors.CodeLocalIOError {
+		t.Fatalf("error code = %s, want %s", appErr.Code, apperrors.CodeLocalIOError)
+	}
+	info, statErr := os.Lstat(path)
+	if statErr != nil {
+		t.Fatalf("Lstat() error = %v", statErr)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("pin path mode = %v, want symlink unchanged", info.Mode())
+	}
+	data, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("ReadFile(target) error = %v", readErr)
+	}
+	if string(data) != original {
+		t.Fatalf("target = %q, want %q", data, original)
 	}
 }
 
 func TestCheckPermissions(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pins.tsv")
+	path := trustTestPath(t)
 	exists, err := CheckPermissions(path)
 	if err != nil {
 		t.Fatalf("CheckPermissions() missing error = %v", err)
@@ -166,7 +282,7 @@ func TestCheckPermissions(t *testing.T) {
 
 func TestConcurrentVerifyOrPinUsesLockfile(t *testing.T) {
 	t.Setenv("OPSKIT_LOCK_TIMEOUT", "30s")
-	path := filepath.Join(t.TempDir(), "pins.tsv")
+	path := trustTestPath(t)
 	store := New(path)
 	address := "server.example:22"
 	candidate := testPin("ssh-ed25519", "SHA256:actual", "actual-key")
@@ -211,4 +327,20 @@ func testPin(algorithm, fingerprint, material string) Pin {
 		Fingerprint: fingerprint,
 		Material:    []byte(material),
 	}
+}
+
+func storedPinLine(address string, pin Pin) string {
+	return strings.Join([]string{
+		address,
+		pin.Algorithm,
+		pin.Fingerprint,
+		base64.StdEncoding.EncodeToString(pin.Material),
+	}, "\t")
+}
+
+func trustTestPath(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	secureTrustTestRoot(t, root)
+	return filepath.Join(root, "pins.tsv")
 }

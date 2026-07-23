@@ -4,14 +4,15 @@ package ctx
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 )
+
+func secureTestRoot(*testing.T, string) {}
 
 func TestStoreUpdateRejectsInsecureExistingFileModeBeforeCallback(t *testing.T) {
 	configureTestStore(t)
 
-	path := filepath.Join(t.TempDir(), "config.yaml")
+	path := privateTestPath(t, "config.yaml")
 	content := []byte("apiVersion: test.io/context/v1\ncurrent-context: \"\"\ncontexts: {}\n")
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)

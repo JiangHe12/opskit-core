@@ -12,7 +12,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 
 	"golang.org/x/crypto/argon2"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/JiangHe12/opskit-core/v2/apperrors"
 	"github.com/JiangHe12/opskit-core/v2/lockfile"
+	"github.com/JiangHe12/opskit-core/v2/securefile"
 )
 
 const (
@@ -103,7 +103,7 @@ func (e *encryptedFileBackend) withMutationLock(mutate func() error) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := securefile.EnsureParent(path); err != nil {
 		return apperrors.New(apperrors.CodeCredentialStoreError, "failed to create credential directory", err)
 	}
 	lock := lockfile.New(path)
@@ -133,11 +133,8 @@ func (e *encryptedFileBackend) readEntries() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := enforceEncryptedFileMode(path); err != nil {
-		return nil, err
-	}
-	data, err := os.ReadFile(path) //nolint:gosec // credentials file path is under user home or test override.
-	if os.IsNotExist(err) {
+	data, err := securefile.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -162,9 +159,6 @@ func (e *encryptedFileBackend) writeEntries(entries map[string]string) error {
 	if err != nil {
 		return err
 	}
-	if err := enforceEncryptedFileMode(path); err != nil {
-		return err
-	}
 	data, err := json.Marshal(entries)
 	if err != nil {
 		return apperrors.New(apperrors.CodeCredentialStoreError, "failed to marshal encrypted credentials", err)
@@ -173,18 +167,8 @@ func (e *encryptedFileBackend) writeEntries(entries map[string]string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return apperrors.New(apperrors.CodeCredentialStoreError, "failed to create credential directory", err)
-	}
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, encrypted, 0o600); err != nil {
-		return apperrors.New(apperrors.CodeCredentialStoreError, "failed to write encrypted credentials", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := securefile.WriteFile(path, encrypted); err != nil {
 		return apperrors.New(apperrors.CodeCredentialStoreError, "failed to replace encrypted credentials", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return apperrors.New(apperrors.CodeCredentialStoreError, "failed to set encrypted credentials permissions", err)
 	}
 	return nil
 }
@@ -295,21 +279,4 @@ func randomBytes(size int) ([]byte, error) {
 		return nil, apperrors.New(apperrors.CodeCredentialStoreError, "failed to generate credential randomness", err)
 	}
 	return out, nil
-}
-
-func enforceEncryptedFileMode(path string) error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return apperrors.New(apperrors.CodeCredentialStoreError, "failed to stat encrypted credentials", err)
-	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return apperrors.New(apperrors.CodeCredentialStoreError, "encrypted credentials file has insecure permissions", nil)
-	}
-	return nil
 }

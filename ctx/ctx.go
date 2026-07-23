@@ -3,16 +3,18 @@ package ctx
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/JiangHe12/opskit-core/v2/apperrors"
 	"github.com/JiangHe12/opskit-core/v2/credstore"
 	"github.com/JiangHe12/opskit-core/v2/lockfile"
+	"github.com/JiangHe12/opskit-core/v2/securefile"
 )
 
 // Base contains common context fields shared by governed CLI tools.
@@ -132,11 +134,8 @@ func (s Store[T]) Load() (*Config[T], error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := enforceContextFileMode(path); err != nil {
-		return nil, err
-	}
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	data, err := securefile.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
 		return emptyConfig[T](), nil
 	}
 	if err != nil {
@@ -165,7 +164,11 @@ func (s Store[T]) Update(fn func(cfg *Config[T]) error) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	path, err := configPath()
+	if err != nil {
+		return err
+	}
+	if err := securefile.EnsureParent(path); err != nil {
 		return apperrors.New(apperrors.CodeLocalIOError, "failed to create config directory", err)
 	}
 	lock := lockfile.New(filepath.Join(dir, "config"))
@@ -256,11 +259,8 @@ func (s Store[T]) loadUnlocked() (*Config[T], error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := enforceContextFileMode(path); err != nil {
-		return nil, err
-	}
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	data, err := securefile.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
 		return emptyConfig[T](), nil
 	}
 	if err != nil {
@@ -274,6 +274,17 @@ func (s Store[T]) decode(data []byte, allowEmptyVersion bool) (*Config[T], error
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&cfg); err != nil {
+		return nil, apperrors.New(apperrors.CodeLocalIOError, "failed to parse context file", err)
+	}
+	var extra yaml.Node
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, apperrors.New(
+				apperrors.CodeLocalIOError,
+				"context file must contain exactly one YAML document",
+				nil,
+			)
+		}
 		return nil, apperrors.New(apperrors.CodeLocalIOError, "failed to parse context file", err)
 	}
 	if allowEmptyVersion && cfg.APIVersion == "" {
@@ -363,59 +374,8 @@ func writeUnlocked[T any](cfg *Config[T]) error {
 	if err != nil {
 		return apperrors.New(apperrors.CodeLocalIOError, "failed to marshal context file", err)
 	}
-	tmpPath := path + ".tmp"
-	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to open temp context file", err)
-	}
-	if _, err := file.Write(data); err != nil {
-		_ = file.Close()
-		_ = os.Remove(tmpPath)
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to write temp context file", err)
-	}
-	if err := file.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to close temp context file", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
+	if err := securefile.WriteFile(path, data); err != nil {
 		return apperrors.New(apperrors.CodeLocalIOError, "failed to replace context file", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to set context file permissions", err)
-	}
-	return setOwnerOnlyACL(path)
-}
-
-func enforceContextFileMode(path string) error {
-	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, "failed to stat context file", err)
-	}
-	if info.IsDir() {
-		return apperrors.New(apperrors.CodeLocalIOError, fmt.Sprintf("context path %q is a directory", path), nil)
-	}
-	if runtime.GOOS == "windows" {
-		return enforceWindowsContextFileACL(path)
-	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return apperrors.New(apperrors.CodeAuthFailed, fmt.Sprintf("context file %s has insecure mode %#o; run: chmod 600 %s", path, info.Mode().Perm(), path), nil)
-	}
-	return checkFileOwner(info, path)
-}
-
-func enforceWindowsContextFileACL(path string) error {
-	if err := verifyOwnerOnlyACL(path); err == nil {
-		return nil
-	}
-	if err := setOwnerOnlyACL(path); err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, fmt.Sprintf("context file %s has insecure ACL and auto-fix failed: %v", path, err), nil)
-	}
-	if err := verifyOwnerOnlyACL(path); err != nil {
-		return apperrors.New(apperrors.CodeLocalIOError, fmt.Sprintf("context file %s still has insecure ACL after auto-fix: %v", path, err), nil)
 	}
 	return nil
 }
