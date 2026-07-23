@@ -121,10 +121,8 @@ func secureTestRoot(t *testing.T, path string) {
 		if err := windows.SetNamedSecurityInfo(
 			current,
 			windows.SE_FILE_OBJECT,
-			windows.OWNER_SECURITY_INFORMATION|
-				windows.DACL_SECURITY_INFORMATION|
-				windows.PROTECTED_DACL_SECURITY_INFORMATION,
-			userSID,
+			windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+			nil,
 			nil,
 			dacl,
 			nil,
